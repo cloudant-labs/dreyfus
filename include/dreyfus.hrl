@@ -11,6 +11,7 @@
 % the License.
 
 -record(index, {
+    version,
     current_seq=0,
     dbname,
     ddoc_id,
@@ -33,6 +34,7 @@
 -record(index_query_args, {
     q,
     limit=25,
+    curr_seq = 0,
     stale=false,
     include_docs=false,
     bookmark=nil,

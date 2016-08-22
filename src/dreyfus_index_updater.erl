@@ -21,6 +21,49 @@
 
 -import(couch_query_servers, [get_os_process/1, ret_os_process/1, proc_prompt/2]).
 
+update(#index{version=Version}=Index, RequestSeq) when Version == 3.0 ->
+    #index{
+        current_seq = CurSeq,
+        dbname = DbName,
+        ddoc_id = DDocId,
+        analyzer=Analyzer,
+        sig=Sig,
+        name = IndexName
+    } = Index,
+    erlang:put(io_priority, {view_update, DbName, IndexName}),
+    {ok, Db} = couch_db:open_int(DbName, []),
+    try
+        %% compute on all docs modified since we last computed.
+        TotalChanges = couch_db:count_changes_since(Db, CurSeq),
+
+        couch_task_status:add_task([
+            {type, search_indexer},
+            {database, DbName},
+            {design_document, DDocId},
+            {index, IndexName},
+            {progress, 0},
+            {changes_done, 0},
+            {total_changes, TotalChanges}
+        ]),
+
+        %% update status every half second
+        couch_task_status:set_update_frequency(500),
+
+        NewCurSeq = couch_db:get_update_seq(Db),
+        Proc = get_os_process(Index#index.def_lang),
+        try
+            true = proc_prompt(Proc, [<<"add_fun">>, Index#index.def]),
+            EnumFun = fun ?MODULE:load_docs/3,
+            Acc0 = {0, Db, Proc, TotalChanges, now(),DbName, Sig, Analyzer,RequestSeq},
+
+            {ok, _, _} = couch_db:enum_docs_since(Db, CurSeq, EnumFun, Acc0, [])
+        after
+            ret_os_process(Proc)
+        end,
+        exit({updated, NewCurSeq})
+    after
+        couch_db:close(Db)
+    end;
 update(IndexPid, Index) ->
     #index{
         current_seq = CurSeq,
@@ -64,6 +107,31 @@ update(IndexPid, Index) ->
         couch_db:close(Db)
     end.
 
+load_docs(FDI, _, {I, Db, Proc, Total, LastCommitTime,DbName, Sig, Analyzer,TargetSeq}=Acc) ->
+    couch_task_status:update([{changes_done, I}, {progress, (I * 100) div Total}]),
+    DI = couch_doc:to_doc_info(FDI),
+    #doc_info{id=Id, high_seq=Seq, revs=[#rev_info{deleted=Del}|_]} = DI,
+    case Del of
+        true ->
+            ok = clouseau_tcp_pool:delete(DbName, Sig, Analyzer,Seq,Id);
+        false ->
+            {ok, Doc} = couch_db:open_doc(Db, DI, []),
+            Json = couch_doc:to_json_obj(Doc, []),
+            [Fields|_] = proc_prompt(Proc, [<<"index_doc">>, Json]),
+            Fields1 = [list_to_tuple(Field) || Field <- Fields],
+            case Fields1 of
+                [] -> ok = clouseau_tcp_pool:delete(DbName, Sig, Analyzer,Seq,Id);
+                _  -> ok = clouseau_tcp_pool:update(DbName, Sig, Analyzer,Seq,Id, Fields1,TargetSeq)
+            end
+    end,
+    %% Force a commit every minute
+    case timer:now_diff(Now = now(), LastCommitTime) >= 60000000 of
+        true ->
+%%             ok = clouseau_rpc:commit(DbName, Sig, Analyzer, Seq),
+            {ok, {I+1, Db, Proc, Total, Now,DbName, Sig, Analyzer,TargetSeq}};
+        false ->
+            {ok, setelement(1, Acc, I+1)}
+    end;
 load_docs(FDI, _, {I, IndexPid, Db, Proc, Total, LastCommitTime}=Acc) ->
     couch_task_status:update([{changes_done, I}, {progress, (I * 100) div Total}]),
     DI = couch_doc:to_doc_info(FDI),

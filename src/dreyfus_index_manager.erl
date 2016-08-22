@@ -47,33 +47,33 @@ init([]) ->
     process_flag(trap_exit, true),
     {ok, nil}.
 
-handle_call({get_index, DbName, #index{sig=Sig}=Index}, From, State) ->
-    case ets:lookup(?BY_SIG, {DbName, Sig}) of
+handle_call({get_index, DbName, #index{sig=Sig, version=Version}=Index}, From, State) ->
+    case ets:lookup(?BY_SIG, {DbName, Version, Sig}) of
     [] ->
         Pid = spawn_link(fun() -> new_index(DbName, Index) end),
-        ets:insert(?BY_PID, {Pid, opening, {DbName, Sig}}),
-        ets:insert(?BY_SIG, {{DbName,Sig}, [From]}),
+        ets:insert(?BY_PID, {Pid, opening, {DbName, Version, Sig}}),
+        ets:insert(?BY_SIG, {{DbName, Version, Sig}, [From]}),
         {noreply, State};
     [{_, WaitList}] when is_list(WaitList) ->
-        ets:insert(?BY_SIG, {{DbName, Sig}, [From | WaitList]}),
+        ets:insert(?BY_SIG, {{DbName, Version, Sig}, [From | WaitList]}),
         {noreply, State};
     [{_, ExistingPid}] ->
         {reply, {ok, ExistingPid}, State}
     end;
 
-handle_call({open_ok, DbName, Sig, NewPid}, {OpenerPid, _}, State) ->
+handle_call({open_ok, DbName, Version, Sig, NewPid}, {OpenerPid, _}, State) ->
     link(NewPid),
-    [{_, WaitList}] = ets:lookup(?BY_SIG, {DbName, Sig}),
+    [{_, WaitList}] = ets:lookup(?BY_SIG, {DbName, Version, Sig}),
     [gen_server:reply(From, {ok, NewPid}) || From <- WaitList],
     ets:delete(?BY_PID, OpenerPid),
-    add_to_ets(NewPid, DbName, Sig),
+    add_to_ets(NewPid, DbName, Version, Sig),
     {reply, ok, State};
 
-handle_call({open_error, DbName, Sig, Error}, {OpenerPid, _}, State) ->
-    [{_, WaitList}] = ets:lookup(?BY_SIG, {DbName, Sig}),
+handle_call({open_error, DbName, Version, Sig, Error}, {OpenerPid, _}, State) ->
+    [{_, WaitList}] = ets:lookup(?BY_SIG, {DbName, Version, Sig}),
     [gen_server:reply(From, Error) || From <- WaitList],
     ets:delete(?BY_PID, OpenerPid),
-    ets:delete(?BY_SIG, {DbName, Sig}),
+    ets:delete(?BY_SIG, {DbName, Version, Sig}),
     {reply, ok, State}.
 
 handle_cast({cleanup, DbName}, State) ->
@@ -91,11 +91,11 @@ handle_info({'EXIT', FromPid, Reason}, State) ->
     % Using Reason /= normal to force a match error
     % if we didn't delete the Pid in a handle_call
     % message for some reason.
-    [{_, opening, {DbName, Sig}}] when Reason /= normal ->
-        Msg = {open_error, DbName, Sig, Reason},
+    [{_, opening, {DbName, Version, Sig}}] when Reason /= normal ->
+        Msg = {open_error, DbName, Sig, Version, Reason},
         {reply, ok, _} = handle_call(Msg, {FromPid, nil}, State);
-    [{_, {DbName, Sig}}] ->
-        delete_from_ets(FromPid, DbName, Sig)
+    [{_, {DbName, Version, Sig}}] ->
+        delete_from_ets(FromPid, DbName, Version, Sig)
     end,
     {noreply, State}.
 
@@ -116,22 +116,22 @@ handle_db_event(DbName, deleted, _St) ->
 handle_db_event(_DbName, _Event, _St) ->
     {ok, nil}.
 
-new_index(DbName, #index{sig=Sig}=Index) ->
+new_index(DbName, #index{sig=Sig, version=Version}=Index) ->
     case (catch dreyfus_index:start_link(DbName, Index)) of
     {ok, NewPid} ->
-        Msg = {open_ok, DbName, Sig, NewPid},
+        Msg = {open_ok, DbName, Version, Sig, NewPid},
         ok = gen_server:call(?MODULE, Msg, infinity),
         unlink(NewPid);
     Error ->
-        Msg = {open_error, DbName, Sig, Error},
+        Msg = {open_error, DbName, Version, Sig, Error},
         ok = gen_server:call(?MODULE, Msg, infinity)
     end.
 
-add_to_ets(Pid, DbName, Sig) ->
-    true = ets:insert(?BY_PID, {Pid, {DbName, Sig}}),
-    true = ets:insert(?BY_SIG, {{DbName, Sig}, Pid}).
+add_to_ets(Pid, DbName, Version, Sig) ->
+    true = ets:insert(?BY_PID, {Pid, {DbName, Version, Sig}}),
+    true = ets:insert(?BY_SIG, {{DbName, Version, Sig}, Pid}).
 
-delete_from_ets(Pid, DbName, Sig) ->
+delete_from_ets(Pid, DbName, Version, Sig) ->
     true = ets:delete(?BY_PID, Pid),
-    true = ets:delete(?BY_SIG, {DbName, Sig}).
+    true = ets:delete(?BY_SIG, {DbName, Version, Sig}).
 

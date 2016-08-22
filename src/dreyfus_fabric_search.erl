@@ -136,6 +136,46 @@ handle_message({ok, #top_docs{}=NewTopDocs}, Shard, State0) ->
             {stop, State1}
         end
     end;
+%clouseau 3.0 clause
+handle_message({ok, {{total_hits,TotalHits},{hits,Hits}},{counts,Counts},{ranges,Ranges}}, Shard, State0) ->
+    NewTopDocs0 = #top_docs{total_hits=TotalHits,hits=Hits},
+    case {Counts, Ranges} of
+        {undefined, undefined} ->
+            NewTopDocs = NewTopDocs0;
+        {_, undefined} ->
+            couch_log:warning("Recieved the counts from clouseau ~p", Counts),
+            NewTopDocs = NewTopDocs0#top_docs{counts=Counts};
+        {undefined, _} ->
+            couch_log:warning("Recieved the ranges from clouseau ~p", Ranges),
+            NewTopDocs = NewTopDocs0#top_docs{ranges=Ranges};
+        {_, _} ->
+            couch_log:warning("Recieved the counts and Ranges from clouseau ~p  and ~p", [Counts,
+            Ranges]),
+            NewTopDocs = NewTopDocs0#top_docs{ranges=Ranges}
+    end,
+
+    State = upgrade_state(State0),
+    #state{top_docs=TopDocs, limit=Limit, sort=Sort} = State,
+    case fabric_dict:lookup_element(Shard, State#state.counters) of
+    undefined ->
+        %% already heard from someone else in this range
+        {ok, State};
+    nil ->
+        C1 = fabric_dict:store(Shard, ok, State#state.counters),
+        C2 = fabric_view:remove_overlapping_shards(Shard, C1),
+        Sortable = make_sortable(Shard, NewTopDocs),
+        MergedTopDocs = merge_top_docs(TopDocs, Sortable, Limit, Sort),
+        State1 = State#state{
+            counters=C2,
+            top_docs=MergedTopDocs
+        },
+        case fabric_dict:any(nil, C2) of
+        true ->
+            {ok, State1};
+        false ->
+            {stop, State1}
+        end
+    end;
 
 % upgrade clause
 handle_message({ok, {top_docs, UpdateSeq, TotalHits, Hits}}, Shard, State) ->
@@ -144,7 +184,25 @@ handle_message({ok, {top_docs, UpdateSeq, TotalHits, Hits}}, Shard, State) ->
       total_hits = TotalHits,
       hits = Hits},
     handle_message({ok, TopDocs}, Shard, State);
+%clouseau 3.0 clause
+handle_message({clouseau_error, Error}, Worker, State0) ->
+    State = upgrade_state(State0),
+    couch_log:warning("in handle message error is ~p Worker is ~p",[Error, Worker]),
 
+    case dreyfus_fabric:handle_error_message({error,Error}, Worker,
+      State#state.counters, State#state.replacements,
+      search, State#state.start_args) of
+        {ok, Counters} ->
+            {ok, State#state{counters=Counters}};
+        {new_refs, NewRefs, NewCounters, NewReplacements} ->
+            NewState = State#state{
+                counters = NewCounters,
+                replacements = NewReplacements
+            },
+            {new_refs, NewRefs, NewState};
+        Else ->
+            Else
+    end;
 handle_message(Error, Worker, State0) ->
     State = upgrade_state(State0),
     case dreyfus_fabric:handle_error_message(Error, Worker,
@@ -174,6 +232,10 @@ make_sortable(Shard, List) when is_list(List) ->
 make_sortable(_, [], Acc) ->
     lists:reverse(Acc);
 make_sortable(Shard, [#hit{}=Hit|Rest], Acc) ->
+    make_sortable(Shard, Rest, [#sortable{item=Hit, order=Hit#hit.order, shard=Shard} | Acc]);
+%clouseau 3.0 clause
+make_sortable(Shard, [{Order,Fields}|Rest], Acc) ->
+    Hit = #hit{order=Order,fields=Fields},
     make_sortable(Shard, Rest, [#sortable{item=Hit, order=Hit#hit.order, shard=Shard} | Acc]).
 
 remove_sortable(List) ->

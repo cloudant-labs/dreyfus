@@ -22,6 +22,7 @@ start_link() ->
 
 init(_Args) ->
     Children = [
+        child(dreyfus_pool),
         child(dreyfus_index_manager)
     ],
     {ok, {{one_for_one,10,1},

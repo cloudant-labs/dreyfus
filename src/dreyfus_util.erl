@@ -20,6 +20,30 @@
 -include_lib("couch/include/couch_db.hrl").
 
 -export([get_shards/2, sort/2, upgrade/1, export/1, time/2]).
+-export([send_clouseau/1]).
+
+send_clouseau(Command) ->
+    PacketIn = encode({self(), Command}),
+    {ok, SocketPid} = dreyfus_pool:get_socket(),
+    couch_log:debug("Sending the command to clouseau using SocketPid ~p",[SocketPid]),
+    SocketPid!{send, self(), PacketIn},
+    loop(SocketPid).
+
+loop(SocketPid) ->
+    receive
+        {ok, SocketPid, PacketOut} ->
+            couch_log:debug("Got the response back ~p",[PacketOut]),
+            PacketOut;
+        {error, SocketPid, Reason} ->
+            couch_log:warning("Error in socket sending, reason is ~p",[Reason]),
+            {error, Reason};
+        Error ->
+            couch_log:warning("Error in socket sending, reason is ~p",[Error]),
+            {error, Error}
+    end.
+
+encode(Term) ->
+    term_to_binary(Term, []).
 
 get_shards(DbName, #index_query_args{stale=ok}) ->
     mem3:ushards(DbName);

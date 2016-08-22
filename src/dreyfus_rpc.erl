@@ -47,24 +47,43 @@ call(Fun, DbName, DDoc, IndexName, QueryArgs0) ->
     {_LastSeq, MinSeq} = calculate_seqs(Db, Stale),
     case dreyfus_index:design_doc_to_index(DDoc, IndexName) of
         {ok, Index} ->
-            case dreyfus_index_manager:get_index(DbName, Index) of
-                {ok, Pid} ->
-                    case dreyfus_index:await(Pid, MinSeq) of
-                        {ok, IndexPid, _Seq} ->
-                            Result = dreyfus_index:Fun(IndexPid, QueryArgs),
-                            rexi:reply(Result);
-                        % obsolete clauses, remove after upgrade
-                        ok ->
-                            Result = dreyfus_index:Fun(Pid, QueryArgs),
-                            rexi:reply(Result);
-                        {ok, _Seq} ->
-                            Result = dreyfus_index:Fun(Pid, QueryArgs),
-                            rexi:reply(Result);
+            #index{version = Version} = Index,
+            case Version of
+                3.0 ->
+                    case dreyfus_index_manager:get_index(DbName, Index) of
+                        {ok, Pid} ->
+                            case dreyfus_index:await(Pid, MinSeq) of
+                                {ok, Seq} ->
+                                    Result = dreyfus_index:Fun(Index#index{dbname=DbName, current_seq=Seq}, QueryArgs0),
+                                    rexi:reply(Result);
+                                Error ->
+                                    couch_log:error("Error < ~p > while waiting for index seq to ~p",[Error, MinSeq]),
+                                    rexi:reply(Error)
+                            end;
                         Error ->
+                            couch_log:error("Error < ~p > while getting index from index manager for DB ~p",[Error, DbName]),
                             rexi:reply(Error)
                     end;
-                Error ->
-                    rexi:reply(Error)
+                _ ->
+                    case dreyfus_index_manager:get_index(DbName, Index) of
+                        {ok, Pid} ->
+                            case dreyfus_index:await(Pid, MinSeq) of
+                                {ok, IndexPid, _Seq} ->
+                                    Result = dreyfus_index:Fun(IndexPid, QueryArgs),
+                                    rexi:reply(Result);
+                                % obsolete clauses, remove after upgrade
+                                ok ->
+                                    Result = dreyfus_index:Fun(Pid, QueryArgs),
+                                    rexi:reply(Result);
+                                {ok, _Seq} ->
+                                    Result = dreyfus_index:Fun(Pid, QueryArgs),
+                                    rexi:reply(Result);
+                                Error ->
+                                    rexi:reply(Error)
+                            end;
+                        Error ->
+                            rexi:reply(Error)
+                    end
             end;
         Error ->
             rexi:reply(Error)

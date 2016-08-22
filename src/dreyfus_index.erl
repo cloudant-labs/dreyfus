@@ -51,16 +51,25 @@ await(Pid, MinSeq) ->
     MFA = {gen_server, call, [Pid, {await, MinSeq}, infinity]},
     dreyfus_util:time([index, await], MFA).
 
+search(#index{}=Index, QueryArgs) ->
+    MFA = {?MODULE, search_int, [Index,QueryArgs]},
+    dreyfus_util:time([index, search], MFA);
 search(Pid0, QueryArgs) ->
     Pid = to_index_pid(Pid0),
     MFA = {?MODULE, search_int, [Pid, QueryArgs]},
     dreyfus_util:time([index, search], MFA).
 
+group1(#index{}=Index, QueryArgs) ->
+    MFA = {?MODULE, group1_int, [Index, QueryArgs]},
+    dreyfus_util:time([index, group1], MFA);
 group1(Pid0, QueryArgs) ->
     Pid = to_index_pid(Pid0),
     MFA = {?MODULE, group1_int, [Pid, QueryArgs]},
     dreyfus_util:time([index, group1], MFA).
 
+group2(#index{}=Index, QueryArgs) ->
+    MFA = {?MODULE, group2_int, [Index, QueryArgs]},
+    dreyfus_util:time([index, group2], MFA);
 group2(Pid0, QueryArgs) ->
     Pid = to_index_pid(Pid0),
     MFA = {?MODULE, group2_int, [Pid, QueryArgs]},
@@ -99,19 +108,38 @@ design_doc_to_indexes(#doc{body={Fields}}=Doc) ->
 
 init({DbName, Index}) ->
     process_flag(trap_exit, true),
-    case open_index(DbName, Index) of
-        {ok, Pid, Seq} ->
-            State=#state{
-              dbname=DbName,
-              index=Index#index{current_seq=Seq, dbname=DbName},
-              index_pid=Pid
-             },
-            {ok, Db} = couch_db:open_int(DbName, []),
-            try couch_db:monitor(Db) after couch_db:close(Db) end,
-            proc_lib:init_ack({ok, self()}),
-            gen_server:enter_loop(?MODULE, [], State);
-        Error ->
-            proc_lib:init_ack(Error)
+    #index{version = Version} = Index,
+    case Version of
+      3.0 ->
+          case open_index(DbName, Index) of
+            {ok, Seq} ->
+                couch_log:debug("Opened index at Seq ~p",[Seq]),
+                State=#state{
+                  dbname=DbName,
+                  index=Index#index{current_seq=Seq, dbname=DbName}
+                 },
+                {ok, Db} = couch_db:open_int(DbName, []),
+                try couch_db:monitor(Db) after couch_db:close(Db) end,
+                proc_lib:init_ack({ok, self()}),
+                gen_server:enter_loop(?MODULE, [], State);
+            Error ->
+                proc_lib:init_ack(Error)
+          end;
+      _ ->
+        case open_index(DbName, Index) of
+            {ok, Pid, Seq} ->
+                State=#state{
+                  dbname=DbName,
+                  index=Index#index{current_seq=Seq, dbname=DbName},
+                  index_pid=Pid
+                 },
+                {ok, Db} = couch_db:open_int(DbName, []),
+                try couch_db:monitor(Db) after couch_db:close(Db) end,
+                proc_lib:init_ack({ok, self()}),
+                gen_server:enter_loop(?MODULE, [], State);
+            Error ->
+                proc_lib:init_ack(Error)
+        end
     end.
 
 handle_call({await, RequestSeq}, From,
@@ -121,14 +149,30 @@ handle_call({await, RequestSeq}, From,
                 updater_pid=nil,
                 waiting_list=WaitList
             }=State) when RequestSeq > Seq ->
-    UpPid = spawn_link(fun() -> dreyfus_index_updater:update(IndexPid, Index) end),
-    {noreply, State#state{
-        updater_pid=UpPid,
-        waiting_list=[{From,RequestSeq}|WaitList]
-    }};
+    #index{version = Version} = Index,
+    case Version of
+      3.0 ->
+          UpPid = spawn_link(fun() -> dreyfus_index_updater:update(Index, RequestSeq) end),
+          {noreply, State#state{
+              updater_pid=UpPid,
+              waiting_list=[{From,RequestSeq}|WaitList]
+          }};
+      _ ->
+        UpPid = spawn_link(fun() -> dreyfus_index_updater:update(IndexPid, Index) end),
+        {noreply, State#state{
+            updater_pid=UpPid,
+            waiting_list=[{From,RequestSeq}|WaitList]
+        }}
+    end;
 handle_call({await, RequestSeq}, _From,
-            #state{index=#index{current_seq=Seq}}=State) when RequestSeq =< Seq ->
-    {reply, {ok, State#state.index_pid, Seq}, State};
+            #state{index=#index{current_seq=Seq}=Index}=State) when RequestSeq =< Seq ->
+    #index{version = Version} = Index,
+    case Version of
+      3.0 ->
+          {reply, {ok, Seq}, State};
+      _ ->
+        {reply, {ok, State#state.index_pid, Seq}, State}
+    end;
 handle_call({await, RequestSeq}, From, #state{waiting_list=WaitList}=State) ->
     {noreply, State#state{
         waiting_list=[{From,RequestSeq}|WaitList]
@@ -164,18 +208,37 @@ handle_info({'EXIT', FromPid, {updated, NewSeq}},
               waiting_list=WaitList
              }=State) when UpPid == FromPid ->
     Index = Index0#index{current_seq=NewSeq},
-    case reply_with_index(IndexPid, Index, WaitList) of
-    [] ->
-        {noreply, State#state{index=Index,
-                              updater_pid=nil,
-                              waiting_list=[]
-                             }};
-    StillWaiting ->
-        Pid = spawn_link(fun() -> dreyfus_index_updater:update(IndexPid, Index) end),
-        {noreply, State#state{index=Index,
-                              updater_pid=Pid,
-                              waiting_list=StillWaiting
-                             }}
+    #index{version = Version} = Index,
+    case Version of
+      3.0 ->
+          case reply_with_index(Index, WaitList) of
+            [] ->
+                {noreply, State#state{index=Index,
+                                      updater_pid=nil,
+                                      waiting_list=[]
+                                     }};
+            StillWaiting ->
+                [{_,RequestSeq} | _Rest] = StillWaiting,
+                Pid = spawn_link(fun() -> dreyfus_index_updater:update(Index,RequestSeq) end),
+                {noreply, State#state{index=Index,
+                                      updater_pid=Pid,
+                                      waiting_list=StillWaiting
+                                     }}
+            end;
+      _ ->
+        case reply_with_index(IndexPid, Index, WaitList) of
+        [] ->
+            {noreply, State#state{index=Index,
+                                  updater_pid=nil,
+                                  waiting_list=[]
+                                 }};
+        StillWaiting ->
+            Pid = spawn_link(fun() -> dreyfus_index_updater:update(IndexPid, Index) end),
+            {noreply, State#state{index=Index,
+                                  updater_pid=Pid,
+                                  waiting_list=StillWaiting
+                                 }}
+        end
     end;
 handle_info({'EXIT', _, {updated, _}}, State) ->
     {noreply, State};
@@ -218,18 +281,35 @@ code_change(_OldVsn, State, _Extra) ->
 
 % private functions.
 
-open_index(DbName, #index{analyzer=Analyzer, sig=Sig}) ->
+open_index(DbName, #index{analyzer=Analyzer, sig=Sig} = Index) ->
     Path = <<DbName/binary,"/",Sig/binary>>,
-    case clouseau_rpc:open_index(self(), Path, Analyzer) of
-        {ok, Pid} ->
-            case clouseau_rpc:get_update_seq(Pid) of
-                {ok, Seq} ->
-                    {ok, Pid, Seq};
-                Error ->
-                    Error
-            end;
-        Error ->
-            Error
+    #index{version = Version} = Index,
+    case Version of
+      3.0 ->
+          Path = <<DbName/binary,"/",Sig/binary>>,
+          Command = [{"reqType", <<3>>},
+              {"path", Path},
+              {"analyzer", Analyzer}
+          ],
+          couch_log:debug("Command to get Seq is ~p",[Command]),
+          case dreyfus_util:send_clouseau(Command) of
+              {ok, CurSeq} ->
+                  {ok, CurSeq};
+              Error ->
+                  Error
+          end;
+      _ ->
+        case clouseau_rpc:open_index(self(), Path, Analyzer) of
+            {ok, Pid} ->
+                case clouseau_rpc:get_update_seq(Pid) of
+                    {ok, Seq} ->
+                        {ok, Pid, Seq};
+                    Error ->
+                        Error
+                end;
+            Error ->
+                Error
+        end
     end.
 
 design_doc_to_index(#doc{id=Id,body={Fields}}, IndexName) ->
@@ -242,6 +322,7 @@ design_doc_to_index(#doc{id=Id,body={Fields}}, IndexName) ->
             {error, {not_found, <<IndexName/binary, " not found.">>}};
         {IndexName, {Index}} ->
             Analyzer = couch_util:get_value(<<"analyzer">>, Index, <<"standard">>),
+            Version = couch_util:get_value(<<"version">>, Index, 2.0),
             case couch_util:get_value(<<"index">>, Index) of
                 undefined ->
                     {error, InvalidDDocError};
@@ -249,6 +330,7 @@ design_doc_to_index(#doc{id=Id,body={Fields}}, IndexName) ->
                     Sig = ?l2b(couch_util:to_hex(couch_crypto:hash(md5,
                         term_to_binary({Analyzer, Def})))),
                     {ok, #index{
+                        version=Version,
                         analyzer=Analyzer,
                         ddoc_id=Id,
                         def=Def,
@@ -260,6 +342,13 @@ design_doc_to_index(#doc{id=Id,body={Fields}}, IndexName) ->
             {error, InvalidDDocError}
     end.
 
+reply_with_index(#index{} = _Index, [], Acc) ->
+    Acc;
+reply_with_index(#index{current_seq = IndexSeq} = Index, [{Pid, Seq}|Rest], Acc) when Seq =< IndexSeq ->
+    gen_server:reply(Pid,{ok, IndexSeq}),
+    reply_with_index(Index, Rest, Acc);
+reply_with_index(#index{} = Index, [{Pid, Seq}|Rest], Acc) ->
+    reply_with_index(Index, Rest, [{Pid, Seq}|Acc]);
 reply_with_index(IndexPid, Index, WaitList) ->
     reply_with_index(IndexPid, Index, WaitList, []).
 
@@ -270,6 +359,10 @@ reply_with_index(IndexPid, #index{current_seq=IndexSeq}=Index, [{Pid, Seq}|Rest]
     reply_with_index(IndexPid, Index, Rest, Acc);
 reply_with_index(IndexPid, Index, [{Pid, Seq}|Rest], Acc) ->
     reply_with_index(IndexPid, Index, Rest, [{Pid, Seq}|Acc]).
+
+reply_with_index(Index, WaitList) ->
+    reply_with_index(Index, WaitList, []).
+
 
 index_name(#index{dbname=DbName,ddoc_id=DDocId,name=IndexName}) ->
     <<DbName/binary, " ", DDocId/binary, " ", IndexName/binary>>.
@@ -309,6 +402,10 @@ args_to_proplist2(#index_query_args{} = Args) ->
      {highlight_size, Args#index_query_args.highlight_size}
     ].
 
+search_int(#index{} = Index, QueryArgs0) ->
+    QueryArgs = dreyfus_util:upgrade(QueryArgs0),
+    Props = args_to_proplist(QueryArgs),
+    clouseau_tcp_pool:search(Index,Props);
 search_int(Pid, QueryArgs0) ->
     QueryArgs = dreyfus_util:upgrade(QueryArgs0),
     case QueryArgs of
@@ -326,6 +423,20 @@ search_int(Pid, QueryArgs0) ->
             clouseau_rpc:search(Pid, Props)
     end.
 
+group1_int(#index{} = Index, QueryArgs0) ->
+    QueryArgs = dreyfus_util:upgrade(QueryArgs0),
+    #index_query_args{
+        q = Query,
+        stale = Stale,
+        grouping = #grouping{
+            by = GroupBy,
+            offset = Offset,
+            limit = Limit,
+            sort = Sort
+        }
+    } = QueryArgs,
+    clouseau_tcp_pool:group1(Index, Query, GroupBy, Stale =:= false, Sort,
+                        Offset, Limit);
 group1_int(Pid, QueryArgs0) ->
     QueryArgs = dreyfus_util:upgrade(QueryArgs0),
     #index_query_args{
@@ -341,6 +452,27 @@ group1_int(Pid, QueryArgs0) ->
     clouseau_rpc:group1(Pid, Query, GroupBy, Stale =:= false, Sort,
                         Offset, Limit).
 
+group2_int(#index{} = Index, QueryArgs0) ->
+    QueryArgs = dreyfus_util:upgrade(QueryArgs0),
+    case QueryArgs of
+        #index_query_args{include_fields=nil, highlight_fields=nil} -> %remove after upgrade
+            #index_query_args{
+                q = Query,
+                stale = Stale,
+                sort = DocSort,
+                limit = DocLimit,
+                grouping = #grouping{
+                    by = GroupBy,
+                    groups = Groups,
+                    sort = GroupSort
+                }
+            } = QueryArgs,
+            clouseau_rpc:group2(Index, Query, GroupBy, Stale =:= false, Groups,
+                                GroupSort, DocSort, DocLimit);
+        _ ->
+            Props = args_to_proplist2(QueryArgs),
+            clouseau_tcp_pool:group2(Index, Props)
+    end;
 group2_int(Pid, QueryArgs0) ->
     QueryArgs = dreyfus_util:upgrade(QueryArgs0),
     case QueryArgs of

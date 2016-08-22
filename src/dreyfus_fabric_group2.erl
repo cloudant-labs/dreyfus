@@ -130,7 +130,12 @@ make_sortable(Shard, TopGroups) ->
 make_sortable_group(Shard, {Name, TotalHits, Hits}) ->
     {Name, TotalHits, [make_sortable_hit(Shard, Hit) || Hit <- Hits]}.
 
-make_sortable_hit(Shard, Hit) ->
+make_sortable_hit(Shard, #hit{}=Hit) ->
+    #sortable{item=Hit, order=Hit#hit.order, shard=Shard};
+make_sortable_hit(Shard, {Order,Fields}) ->
+    %% With new clouseau we can only send in the tuple, and need to convert it into Hit record
+    Hit = #hit{order=Order,fields=Fields},
+    couch_log:debug("Making the sortable hit for Hit ~p",[Hit]),
     #sortable{item=Hit, order=Hit#hit.order, shard=Shard}.
 
 remove_sortable(SortableGroups) ->
