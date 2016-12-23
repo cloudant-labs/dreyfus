@@ -31,6 +31,14 @@ update(IndexPid, Index) ->
     erlang:put(io_priority, {view_update, DbName, IndexName}),
     {ok, Db} = couch_db:open_int(DbName, []),
     try
+        {ok, IdxPurgeSeq} = clouseau_rpc:get_purge_seq(IndexPid),
+        FoldFun = fun(PurgeSeq, {Id, _Revs}, Acc) ->
+            clouseau_rpc:delete(IndexPid, Id),
+            clouseau_rpc:set_purge_seq(IndexPid, PurgeSeq),
+            {ok, Acc}
+        end,
+        couch_db:fold_purged_docs(Db, IdxPurgeSeq, FoldFun, nil, []),
+
         %% compute on all docs modified since we last computed.
         TotalChanges = couch_db:count_changes_since(Db, CurSeq),
 
