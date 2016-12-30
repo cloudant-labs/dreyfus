@@ -16,7 +16,8 @@
 -include_lib("dreyfus/include/dreyfus.hrl").
 -include_lib("couch/include/couch_eunit.hrl").
 
--export([test_purge_single/0, test_purge_multiple/0, test_purge_multiple2/0, test_purge_conflict/0, test_all/0]).
+-export([test_purge_single/0, test_purge_multiple/0, test_purge_multiple2/0,
+    test_purge_conflict/0, test_purge_update/0, test_purge_update2/0, test_all/0]).
 %-export([create_db_docs/1, create_docs/2, delete_db/1, purge_one_doc/2, dreyfus_search/2]).
 
 test_all() ->
@@ -24,6 +25,8 @@ test_all() ->
     test_purge_multiple(),
     test_purge_multiple2(),
     test_purge_conflict(),
+    test_purge_update(),
+    test_purge_update2(),
     ok.
 
 
@@ -146,6 +149,95 @@ test_purge_conflict() ->
     delete_db(TargetDbName),
     ok.
 
+
+test_purge_update() ->
+    %create the db and docs
+    DbName = db_name(),
+    create_db_docs(DbName),
+
+    QueryRed = <<"color:red">>,
+    QueryGreen = <<"color:green">>,
+    DBFullName = get_full_dbname(DbName),
+
+    %first search request
+    {ok, _, HitCount1, _, _, _} = dreyfus_search(DbName, QueryRed),
+
+    ?assertEqual(HitCount1, 5),
+
+    %update doc
+    Rev = get_rev(DBFullName, <<"apple">>),
+    Doc = couch_doc:from_json_obj({[
+        {<<"_id">>, <<"apple">>},
+        {<<"_rev">>, couch_doc:rev_to_str(Rev)},
+        {<<"color">>, <<"green">>},
+        {<<"size">>, 8}
+    ]}),
+    {ok, _} = fabric:update_docs(DbName, [Doc], [?ADMIN_CTX]),
+
+    %second search request
+    {ok, _, HitCount2, _, _, _} = dreyfus_search(DbName, QueryRed),
+    {ok, _, HitCount3, _, _, _} = dreyfus_search(DbName, QueryGreen),
+
+    % 4 red and 1 green
+    ?assertEqual(HitCount2, 4),
+    ?assertEqual(HitCount3, 1),
+
+    % purge 2 docs, 1 red and 1 green
+    purge_docs(DBFullName, [<<"apple">>, <<"tomato">>]),
+
+    % third search request
+    {ok, _, HitCount4, _, _, _} = dreyfus_search(DbName, QueryRed),
+    {ok, _, HitCount5, _, _, _} = dreyfus_search(DbName, QueryGreen),
+
+    % 3 red and 0 green
+    ?assertEqual(HitCount4, 3),
+    ?assertEqual(HitCount5, 0),
+
+    delete_db(DbName),
+    ok.
+
+test_purge_update2() ->
+    %create the db and docs
+    DbName = db_name(),
+    create_db_docs(DbName),
+
+    Query1 = <<"size:1">>,
+    Query1000 = <<"size:1000">>,
+    DBFullName = get_full_dbname(DbName),
+
+    %first search request
+    {ok, _, HitCount1, _, _, _} = dreyfus_search(DbName, Query1),
+    {ok, _, HitCount2, _, _, _} = dreyfus_search(DbName, Query1000),
+
+    ?assertEqual(HitCount1, 5),
+    ?assertEqual(HitCount2, 0),
+
+    %update doc 999 times, it will take about 30 seconds.
+    update_doc(DbName, DBFullName, <<"apple">>, 999),
+
+    %second search request
+    {ok, _, HitCount3, _, _, _} = dreyfus_search(DbName, Query1),
+    {ok, _, HitCount4, _, _, _} = dreyfus_search(DbName, Query1000),
+
+    % 4 value(1) and 1 value(1000)
+    ?assertEqual(HitCount3, 4),
+    ?assertEqual(HitCount4, 1),
+
+    % purge doc
+    purge_docs(DBFullName, [<<"apple">>]),
+
+    % third search request
+    {ok, _, HitCount5, _, _, _} = dreyfus_search(DbName, Query1),
+    {ok, _, HitCount6, _, _, _} = dreyfus_search(DbName, Query1000),
+
+    % 4 value(1) and 0 value(1000)
+    ?assertEqual(HitCount5, 4),
+    ?assertEqual(HitCount6, 0),
+
+    delete_db(DbName),
+    ok.
+
+
 %private API
 db_name() ->
     Nums = tuple_to_list(erlang:now()),
@@ -194,14 +286,14 @@ make_doc(Id) ->
     couch_doc:from_json_obj({[
         {<<"_id">>, get_value(Id)},
         {<<"color">>, <<"red">>},
-        {<<"version">>, Id}
+        {<<"size">>, 1}
     ]}).
 
 make_doc_green(Id) ->
     couch_doc:from_json_obj({[
         {<<"_id">>, get_value(Id)},
         {<<"color">>, <<"green">>},
-        {<<"version">>, Id}
+        {<<"size">>, 1}
     ]}).
 
 get_value(Key) ->
@@ -219,6 +311,8 @@ get_value(Key) ->
     end.
 
 get_full_dbname(DbName) ->
+    %DbName is like test-db-148385462200104,
+    %full db name will be test-db-148385462200104.1483854622 or test-db-148385462200104.1483085462
     Suffix = lists:sublist(binary_to_list(DbName), 9, 10),
     %Suffix1 = lists:sublist(binary_to_list(DbName), 9, 4),
     %Suffix2 = lists:sublist(binary_to_list(DbName), 13, 5),
@@ -239,8 +333,8 @@ make_design_doc(dreyfus) ->
                     "  if(doc.color) {\n"
                     "    index(\"color\", doc.color);\n"
                     "  }\n"
-                    "  if(doc.version) {\n"
-                    "    index(\"version\", doc.version);\n"
+                    "  if(doc.size) {\n"
+                    "    index(\"size\", doc.size);\n"
                     "  }\n"
                     "}"
                 >>}
@@ -254,3 +348,23 @@ make_replicate_doc(SourceDbName, TargetDbName) ->
         {<<"source">>, list_to_binary("http://localhost:15984/" ++ SourceDbName)},
         {<<"target">>, list_to_binary("http://localhost:15984/" ++ TargetDbName)}
     ]}).
+
+get_rev(DBFullName, DocId) ->
+    {ok, Db} = couch_db:open_int(DBFullName, []),
+    FDI = couch_db:get_full_doc_info(Db, DocId),
+    #doc_info{ revs = [#rev_info{} = PrevRev | _] } = couch_doc:to_doc_info(FDI),
+    Rev = PrevRev#rev_info.rev,
+    Rev.
+
+update_doc(_, _, _, 0) ->
+    ok;
+update_doc(DbName, DBFullName, DocId, Times) ->
+    Rev = get_rev(DBFullName, DocId),
+    Doc = couch_doc:from_json_obj({[
+        {<<"_id">>, <<"apple">>},
+        {<<"_rev">>, couch_doc:rev_to_str(Rev)},
+        {<<"size">>, 1001 - Times}
+    ]}),
+    {ok, _} = fabric:update_docs(DbName, [Doc], [?ADMIN_CTX]),
+    update_doc(DbName, DBFullName, DocId, Times-1).
+
