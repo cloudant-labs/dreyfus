@@ -31,14 +31,7 @@ update(IndexPid, Index) ->
     erlang:put(io_priority, {view_update, DbName, IndexName}),
     {ok, Db} = couch_db:open_int(DbName, []),
     try
-        {ok, IdxPurgeSeq} = clouseau_rpc:get_purge_seq(IndexPid),
-        FoldFun = fun(PurgeSeq, {Id, _Revs}, Acc) ->
-            clouseau_rpc:delete(IndexPid, Id),
-            clouseau_rpc:set_purge_seq(IndexPid, PurgeSeq),
-            {ok, Acc}
-        end,
-        couch_db:fold_purged_docs(Db, IdxPurgeSeq, FoldFun, nil, []),
-
+        ok = purge_index(Db, IndexPid, Index),
         %% compute on all docs modified since we last computed.
         TotalChanges = couch_db:count_changes_since(Db, CurSeq),
 
@@ -98,3 +91,36 @@ load_docs(FDI, {I, IndexPid, Db, Proc, Total, LastCommitTime}=Acc) ->
         false ->
             {ok, setelement(1, Acc, I+1)}
     end.
+
+purge_index(Db, IndexPid, Index) ->
+    {ok, IdxPurgeSeq} = clouseau_rpc:get_purge_seq(IndexPid),
+    Proc = get_os_process(Index#index.def_lang),
+    true = proc_prompt(Proc, [<<"add_fun">>, Index#index.def]),
+    FoldFun = fun(PurgeSeq, {Id, _Revs}, Acc) ->
+        case couch_db:get_full_doc_info(Db, Id) of
+            not_found ->
+                ok = clouseau_rpc:delete(IndexPid, Id);
+            FDI ->
+                DI = couch_doc:to_doc_info(FDI),
+                #doc_info{id=Id, revs=[#rev_info{deleted=Del}|_]} = DI,
+                case Del of
+                    true ->
+                        ok = clouseau_rpc:delete(IndexPid, Id);
+                    false ->
+                        {ok, Doc} = couch_db:open_doc(Db, DI, []),
+                        Json = couch_doc:to_json_obj(Doc, []),
+                        [Fields|_] = proc_prompt(Proc, [<<"index_doc">>, Json]),
+                        Fields1 = [list_to_tuple(Field) || Field <- Fields],
+                        case Fields1 of
+                            [] ->
+                                ok = clouseau_rpc:delete(IndexPid, Id);
+                            _  ->
+                                ok = clouseau_rpc:update(IndexPid, Id, Fields1)
+                        end
+                end
+        end,
+        clouseau_rpc:set_purge_seq(IndexPid, PurgeSeq),
+        {ok, Acc}
+    end,
+    couch_db:fold_purged_docs(Db, IdxPurgeSeq, FoldFun, nil, []),
+    ok.
