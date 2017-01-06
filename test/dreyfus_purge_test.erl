@@ -17,7 +17,9 @@
 -include_lib("couch/include/couch_eunit.hrl").
 
 -export([test_purge_single/0, test_purge_multiple/0, test_purge_multiple2/0,
-    test_purge_conflict/0, test_purge_update/0, test_purge_update2/0, test_all/0]).
+    test_purge_conflict/0, test_purge_conflict2/0, test_purge_update/0, test_purge_update2/0,
+    test_delete/0, test_delete_purge_conflict/0, test_delete_conflict/0,
+    test_all/0]).
 %-export([create_db_docs/1, create_docs/2, delete_db/1, purge_one_doc/2, dreyfus_search/2]).
 
 test_all() ->
@@ -27,8 +29,11 @@ test_all() ->
     test_purge_conflict(),
     test_purge_update(),
     test_purge_update2(),
+    test_purge_conflict2(),
+    test_delete(),
+    test_delete_purge_conflict(),
+    test_delete_conflict(),
     ok.
-
 
 test_purge_single() ->
     DbName = db_name(),
@@ -41,7 +46,6 @@ test_purge_single() ->
     ?assertEqual(HitCount2, 0),
     delete_db(DbName),
     ok.
-
 
 test_purge_multiple() ->
     Query = <<"color:red">>,
@@ -69,7 +73,6 @@ test_purge_multiple() ->
     %delete the db
     delete_db(DbName),
     ok.
-
 
 test_purge_multiple2() ->
     %create the db and docs
@@ -149,6 +152,48 @@ test_purge_conflict() ->
     delete_db(TargetDbName),
     ok.
 
+test_purge_conflict2() ->
+    %create dbs and docs
+    SourceDbName = db_name(),
+    timer:sleep(2000),
+    TargetDbName = db_name(),
+
+    create_db_docs(SourceDbName),
+    create_db(TargetDbName),
+    GreenDocs = [make_doc_green(I) || I <- lists:seq(1, 5)],
+    {ok, _} = fabric:update_docs(TargetDbName, GreenDocs, [?ADMIN_CTX]),
+    {ok, _} = fabric:update_doc(TargetDbName, make_design_doc(dreyfus), [?ADMIN_CTX]),
+
+    %first search
+    {ok, _, RedHitCount1, _RedHits1, _, _} = dreyfus_search(TargetDbName, <<"color:red">>),
+    {ok, _, GreenHitCount1, _GreenHits1, _, _} = dreyfus_search(TargetDbName, <<"color:green">>),
+
+    ?assertEqual(5, RedHitCount1 + GreenHitCount1),
+
+    %do replicate and make conflicted docs
+    {ok, _} = fabric:update_doc(<<"_replicator">>, make_replicate_doc(SourceDbName, TargetDbName), [?ADMIN_CTX]),
+
+    timer:sleep(5000),
+
+    %second search
+    {ok, _, RedHitCount2, _RedHits2, _, _} = dreyfus_search(TargetDbName, <<"color:red">>),
+    {ok, _, GreenHitCount2, _GreenHits2, _, _} = dreyfus_search(TargetDbName, <<"color:green">>),
+
+    ?assertEqual(5, RedHitCount2 + GreenHitCount2),
+
+    DBFullName = get_full_dbname(TargetDbName),
+    purge_docs(DBFullName, [<<"apple">>, <<"tomato">>, <<"cherry">>, <<"haw">>, <<"strawberry">>]),
+    purge_docs(DBFullName, [<<"apple">>, <<"tomato">>, <<"cherry">>, <<"haw">>, <<"strawberry">>]),
+
+    %third search
+    {ok, _, RedHitCount3, _RedHits3, _, _} = dreyfus_search(TargetDbName, <<"color:red">>),
+    {ok, _, GreenHitCount3, _GreenHits3, _, _} = dreyfus_search(TargetDbName, <<"color:green">>),
+
+    ?assertEqual(0, RedHitCount3 + GreenHitCount3),
+
+    delete_db(SourceDbName),
+    delete_db(TargetDbName),
+    ok.
 
 test_purge_update() ->
     %create the db and docs
@@ -237,6 +282,112 @@ test_purge_update2() ->
     delete_db(DbName),
     ok.
 
+test_delete() ->
+    DbName = db_name(),
+    create_db_docs(DbName),
+    {ok, _, HitCount1, _, _, _} = dreyfus_search(DbName, <<"apple">>),
+    ?assertEqual(HitCount1, 1),
+    DBFullName = get_full_dbname(DbName),
+    ok = delete_docs(DBFullName, [<<"apple">>]),
+    {ok, _, HitCount2, _, _, _} = dreyfus_search(DbName, <<"apple">>),
+    ?assertEqual(HitCount2, 0),
+    delete_db(DbName),
+    ok.
+
+test_delete_conflict() ->
+    %create dbs and docs
+    SourceDbName = db_name(),
+    timer:sleep(2000),
+    TargetDbName = db_name(),
+
+    create_db_docs(SourceDbName),
+    create_db(TargetDbName),
+    GreenDocs = [make_doc_green(I) || I <- lists:seq(1, 5)],
+    {ok, _} = fabric:update_docs(TargetDbName, GreenDocs, [?ADMIN_CTX]),
+    {ok, _} = fabric:update_doc(TargetDbName, make_design_doc(dreyfus), [?ADMIN_CTX]),
+
+    %first search
+    {ok, _, RedHitCount1, _RedHits1, _, _} = dreyfus_search(TargetDbName, <<"color:red">>),
+    {ok, _, GreenHitCount1, _GreenHits1, _, _} = dreyfus_search(TargetDbName, <<"color:green">>),
+
+    ?assertEqual(5, RedHitCount1 + GreenHitCount1),
+
+    %do replicate and make conflicted docs
+    {ok, _} = fabric:update_doc(<<"_replicator">>, make_replicate_doc(SourceDbName, TargetDbName), [?ADMIN_CTX]),
+
+    timer:sleep(5000),
+
+    %second search
+    {ok, _, RedHitCount2, _RedHits2, _, _} = dreyfus_search(TargetDbName, <<"color:red">>),
+    {ok, _, GreenHitCount2, _GreenHits2, _, _} = dreyfus_search(TargetDbName, <<"color:green">>),
+
+    ?assertEqual(5, RedHitCount2 + GreenHitCount2),
+
+    DBFullName = get_full_dbname(TargetDbName),
+    %delete docs
+    delete_docs(DBFullName, [<<"apple">>, <<"tomato">>, <<"cherry">>, <<"haw">>, <<"strawberry">>]),
+
+    %third search
+    {ok, _, RedHitCount3, _RedHits3, _, _} = dreyfus_search(TargetDbName, <<"color:red">>),
+    {ok, _, GreenHitCount3, _GreenHits3, _, _} = dreyfus_search(TargetDbName, <<"color:green">>),
+
+    ?assertEqual(5, RedHitCount3 + GreenHitCount3),
+    ?assertEqual(RedHitCount2, GreenHitCount3),
+    ?assertEqual(GreenHitCount2, RedHitCount3),
+
+    delete_db(SourceDbName),
+    delete_db(TargetDbName),
+    ok.
+
+test_delete_purge_conflict() ->
+    %create dbs and docs
+    SourceDbName = db_name(),
+    timer:sleep(2000),
+    TargetDbName = db_name(),
+
+    create_db_docs(SourceDbName),
+    create_db(TargetDbName),
+    GreenDocs = [make_doc_green(I) || I <- lists:seq(1, 5)],
+    {ok, _} = fabric:update_docs(TargetDbName, GreenDocs, [?ADMIN_CTX]),
+    {ok, _} = fabric:update_doc(TargetDbName, make_design_doc(dreyfus), [?ADMIN_CTX]),
+
+    %first search
+    {ok, _, RedHitCount1, _RedHits1, _, _} = dreyfus_search(TargetDbName, <<"color:red">>),
+    {ok, _, GreenHitCount1, _GreenHits1, _, _} = dreyfus_search(TargetDbName, <<"color:green">>),
+
+    ?assertEqual(5, RedHitCount1 + GreenHitCount1),
+
+    %do replicate and make conflicted docs
+    {ok, _} = fabric:update_doc(<<"_replicator">>, make_replicate_doc(SourceDbName, TargetDbName), [?ADMIN_CTX]),
+
+    timer:sleep(5000),
+
+    %second search
+    {ok, _, RedHitCount2, _RedHits2, _, _} = dreyfus_search(TargetDbName, <<"color:red">>),
+    {ok, _, GreenHitCount2, _GreenHits2, _, _} = dreyfus_search(TargetDbName, <<"color:green">>),
+
+    ?assertEqual(5, RedHitCount2 + GreenHitCount2),
+
+    DBFullName = get_full_dbname(TargetDbName),
+    %purge docs
+    purge_docs(DBFullName, [<<"apple">>, <<"tomato">>, <<"cherry">>, <<"haw">>, <<"strawberry">>]),
+
+    %delete docs
+    delete_docs(DBFullName, [<<"apple">>, <<"tomato">>, <<"cherry">>, <<"haw">>, <<"strawberry">>]),
+
+    %third search
+    {ok, _, RedHitCount3, _RedHits3, _, _} = dreyfus_search(TargetDbName, <<"color:red">>),
+    {ok, _, GreenHitCount3, _GreenHits3, _, _} = dreyfus_search(TargetDbName, <<"color:green">>),
+
+    couch_log:notice("[~p] RedHitCount3:~p, GreenHitCount3:~p, GreenHitCount3:~p, RedHitCount3:~p", [?MODULE, RedHitCount3, GreenHitCount3, GreenHitCount3, RedHitCount3]),
+    ?assertEqual(RedHitCount3, 0),
+    ?assertEqual(GreenHitCount3, 0),
+    ?assertEqual(GreenHitCount3, 0),
+    ?assertEqual(RedHitCount3, 0),
+
+    delete_db(SourceDbName),
+    delete_db(TargetDbName),
+    ok.
 
 %private API
 db_name() ->
@@ -252,6 +403,7 @@ purge_one_doc(DBFullName, DocId) ->
     Rev = PrevRev#rev_info.rev,
     couch_log:notice("[~p] purge doc Id:~p, Rev:~p", [?MODULE, DocId, Rev]),
     {ok, {_, [{ok, _}]}} = couch_db:purge_docs(Db, [{DocId, [Rev]}]),
+    couch_db:close(Db),
     ok.
 
 purge_docs(DBFullName, DocIds) ->
@@ -354,6 +506,7 @@ get_rev(DBFullName, DocId) ->
     FDI = couch_db:get_full_doc_info(Db, DocId),
     #doc_info{ revs = [#rev_info{} = PrevRev | _] } = couch_doc:to_doc_info(FDI),
     Rev = PrevRev#rev_info.rev,
+    couch_db:close(Db),
     Rev.
 
 update_doc(_, _, _, 0) ->
@@ -367,4 +520,24 @@ update_doc(DbName, DBFullName, DocId, Times) ->
     ]}),
     {ok, _} = fabric:update_docs(DbName, [Doc], [?ADMIN_CTX]),
     update_doc(DbName, DBFullName, DocId, Times-1).
+
+delete_docs(DBFullName, DocIds) ->
+    lists:foreach(
+        fun(DocId) -> ok = delete_doc(DBFullName, DocId) end,
+        DocIds
+    ).
+
+delete_doc(DBFullName, DocId) ->
+    {ok, Db} = couch_db:open_int(DBFullName, [?ADMIN_CTX]),
+    FDI = couch_db:get_full_doc_info(Db, DocId),
+    #doc_info{ revs = [#rev_info{} = PrevRev | _] } = couch_doc:to_doc_info(FDI),
+    Rev = PrevRev#rev_info.rev,
+    DDoc = couch_doc:from_json_obj({[
+        {<<"_id">>, DocId},
+        {<<"_rev">>, couch_doc:rev_to_str(Rev)},
+        {<<"_deleted">>, true}
+    ]}),
+    {ok, _} = couch_db:update_doc(Db, DDoc, [Rev]),
+    couch_db:close(Db),
+    ok.
 
