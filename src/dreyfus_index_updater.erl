@@ -69,29 +69,10 @@ update(IndexPid, Index) ->
 load_docs(FDI, {I, IndexPid, Db, Proc, Total, LastCommitTime, ExcludeIdRevs}=Acc) ->
     couch_task_status:update([{changes_done, I}, {progress, (I * 100) div Total}]),
     DI = couch_doc:to_doc_info(FDI),
-    #doc_info{id=Id, high_seq=Seq, revs=[#rev_info{rev=Rev, deleted=Del}|_]} = DI,
+    #doc_info{id=Id, high_seq=Seq, revs=[#rev_info{rev=Rev}|_]} = DI,
     case lists:member({Id, Rev}, ExcludeIdRevs) of
         true -> ok;
-        false ->
-            case Del of
-                true ->
-                    ok = clouseau_rpc:delete(IndexPid, Id);
-                false ->
-                    case lists:member({Id, Rev}, ExcludeIdRevs) of
-                        true -> ok;
-                        false ->
-                            {ok, Doc} = couch_db:open_doc(Db, DI, []),
-                            Json = couch_doc:to_json_obj(Doc, []),
-                            [Fields|_] = proc_prompt(Proc, [<<"index_doc">>, Json]),
-                            Fields1 = [list_to_tuple(Field) || Field <- Fields],
-                            case Fields1 of
-                                [] ->
-                                    ok = clouseau_rpc:delete(IndexPid, Id);
-                                _  ->
-                                    ok = clouseau_rpc:update(IndexPid, Id, Fields1)
-                            end
-                    end
-            end
+        false -> update_or_delete_index(IndexPid, Db, DI, Proc)
     end,
     %% Force a commit every minute
     case timer:now_diff(Now = now(), LastCommitTime) >= 60000000 of
@@ -105,39 +86,45 @@ load_docs(FDI, {I, IndexPid, Db, Proc, Total, LastCommitTime, ExcludeIdRevs}=Acc
 purge_index(Db, IndexPid, Index) ->
     {ok, IdxPurgeSeq} = clouseau_rpc:get_purge_seq(IndexPid),
     Proc = get_os_process(Index#index.def_lang),
-    true = proc_prompt(Proc, [<<"add_fun">>, Index#index.def]),
-    FoldFun = fun(PurgeSeq, {Id, _Revs}, Acc) ->
-        case couch_db:get_full_doc_info(Db, Id) of
-            not_found ->
-                ok = clouseau_rpc:delete(IndexPid, Id),
-                Acc0 = Acc;
-            FDI ->
-                DI = couch_doc:to_doc_info(FDI),
-                #doc_info{id=Id, revs=[#rev_info{rev=Rev, deleted=Del}|_]} = DI,
-                case lists:member({Id, Rev}, Acc) of
-                    true ->
-                        Acc0 = Acc;
-                    false ->
-                        case Del of
-                            true ->
-                                ok = clouseau_rpc:delete(IndexPid, Id);
-                            false ->
-                                {ok, Doc} = couch_db:open_doc(Db, DI, []),
-                                Json = couch_doc:to_json_obj(Doc, []),
-                                [Fields|_] = proc_prompt(Proc, [<<"index_doc">>, Json]),
-                                Fields1 = [list_to_tuple(Field) || Field <- Fields],
-                                case Fields1 of
-                                    [] ->
-                                        ok = clouseau_rpc:delete(IndexPid, Id);
-                                    _  ->
-                                        ok = clouseau_rpc:update(IndexPid, Id, Fields1)
-                                end
-                        end,
-                        lists:keydelete(Id, 1, Acc),
-                        Acc0 = lists:append([{Id, Rev}], Acc)
-                end
+    try
+        true = proc_prompt(Proc, [<<"add_fun">>, Index#index.def]),
+        FoldFun = fun(PurgeSeq, {Id, _Revs}, Acc) ->
+            Acc0 = case couch_db:get_full_doc_info(Db, Id) of
+                not_found ->
+                    ok = clouseau_rpc:delete(IndexPid, Id),
+                    Acc;
+                FDI ->
+                    DI = couch_doc:to_doc_info(FDI),
+                    #doc_info{id=Id, revs=[#rev_info{rev=Rev}|_]} = DI,
+                    case lists:member({Id, Rev}, Acc) of
+                        true -> Acc;
+                        false ->
+                            update_or_delete_index(IndexPid, Db, DI, Proc),
+                            [{Id, Rev} | Acc]
+                    end
+            end,
+            clouseau_rpc:set_purge_seq(IndexPid, PurgeSeq),
+            {ok, Acc0}
         end,
-        clouseau_rpc:set_purge_seq(IndexPid, PurgeSeq),
-        {ok, Acc0}
-    end,
-    couch_db:fold_purged_docs(Db, IdxPurgeSeq, FoldFun, [], []).
+        couch_db:fold_purged_docs(Db, IdxPurgeSeq, FoldFun, [], [])
+    after
+        ret_os_process(Proc)
+    end.
+
+update_or_delete_index(IndexPid, Db, DI, Proc) ->
+    #doc_info{id=Id, revs=[#rev_info{deleted=Del}|_]} = DI,
+    case Del of
+        true ->
+            ok = clouseau_rpc:delete(IndexPid, Id);
+        false ->
+            {ok, Doc} = couch_db:open_doc(Db, DI, []),
+            Json = couch_doc:to_json_obj(Doc, []),
+            [Fields|_] = proc_prompt(Proc, [<<"index_doc">>, Json]),
+            Fields1 = [list_to_tuple(Field) || Field <- Fields],
+            case Fields1 of
+                [] ->
+                    ok = clouseau_rpc:delete(IndexPid, Id);
+                _  ->
+                    ok = clouseau_rpc:update(IndexPid, Id, Fields1)
+            end
+    end.
