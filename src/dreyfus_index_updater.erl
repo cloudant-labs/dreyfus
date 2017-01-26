@@ -31,6 +31,8 @@ update(IndexPid, Index) ->
     erlang:put(io_priority, {view_update, DbName, IndexName}),
     {ok, Db} = couch_db:open_int(DbName, []),
     try
+        %ExcludeIdRevs is [{Id1, Rev1}, {Id2, Rev2}, ...]
+        %The Rev is the final Rev, not purged Rev.
         {ok, ExcludeIdRevs} = purge_index(Db, IndexPid, Index),
         %% compute on all docs modified since we last computed.
         TotalChanges = couch_db:count_changes_since(Db, CurSeq),
@@ -70,6 +72,7 @@ load_docs(FDI, {I, IndexPid, Db, Proc, Total, LastCommitTime, ExcludeIdRevs}=Acc
     couch_task_status:update([{changes_done, I}, {progress, (I * 100) div Total}]),
     DI = couch_doc:to_doc_info(FDI),
     #doc_info{id=Id, high_seq=Seq, revs=[#rev_info{rev=Rev}|_]} = DI,
+    %check if it is processed in purge_index to avoid update the index again.
     case lists:member({Id, Rev}, ExcludeIdRevs) of
         true -> ok;
         false -> update_or_delete_index(IndexPid, Db, DI, Proc)
@@ -88,7 +91,7 @@ purge_index(Db, IndexPid, Index) ->
     Proc = get_os_process(Index#index.def_lang),
     try
         true = proc_prompt(Proc, [<<"add_fun">>, Index#index.def]),
-        FoldFun = fun(PurgeSeq, {Id, _Revs}, Acc) ->
+        FoldFun = fun({PurgeSeq, _UUID, Id, _Revs}, {Acc, _}) ->
             Acc0 = case couch_db:get_full_doc_info(Db, Id) of
                 not_found ->
                     ok = clouseau_rpc:delete(IndexPid, Id),
@@ -103,10 +106,14 @@ purge_index(Db, IndexPid, Index) ->
                             [{Id, Rev} | Acc]
                     end
             end,
-            clouseau_rpc:set_purge_seq(IndexPid, PurgeSeq),
-            {ok, Acc0}
+            {Acc0, PurgeSeq}
         end,
-        couch_db:fold_purged_docs(Db, IdxPurgeSeq, FoldFun, [], [])
+
+        {ok, {ExcludeList, NewPurgeSeq}} = couch_db:fold_purged_docs(
+            Db, IdxPurgeSeq, FoldFun, {[], 0}, []),
+        clouseau_rpc:set_purge_seq(IndexPid, NewPurgeSeq),
+        update_local_doc(Db, Index, NewPurgeSeq),
+        {ok, ExcludeList}
     after
         ret_os_process(Proc)
     end.
@@ -128,3 +135,8 @@ update_or_delete_index(IndexPid, Db, DI, Proc) ->
                     ok = clouseau_rpc:update(IndexPid, Id, Fields1)
             end
     end.
+
+update_local_doc(Db, Index, PurgeSeq) ->
+    DocId = dreyfus_util:get_local_purge_doc_id(Index#index.sig),
+    DocContent = dreyfus_util:get_local_purge_doc_body(Db, DocId, PurgeSeq, Index),
+    couch_db:update_doc(Db, DocContent, []).
