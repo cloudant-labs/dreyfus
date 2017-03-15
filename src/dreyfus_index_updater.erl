@@ -129,10 +129,8 @@ update_or_delete_index(IndexPid, Db, DI, Proc) ->
             [Fields|_] = proc_prompt(Proc, [<<"index_doc">>, Json]),
             Fields1 = [list_to_tuple(Field) || Field <- Fields],
             case Fields1 of
-                [] ->
-                    ok = clouseau_rpc:delete(IndexPid, Id);
-                _  ->
-                    ok = clouseau_rpc:update(IndexPid, Id, Fields1)
+                [] -> ok = clouseau_rpc:delete(IndexPid, Id);
+                _  -> ok = clouseau_rpc:update(IndexPid, Id, Fields1)
             end
     end.
 

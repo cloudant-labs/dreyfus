@@ -20,7 +20,7 @@
 -include_lib("couch/include/couch_db.hrl").
 
 -export([get_shards/2, sort/2, upgrade/1, export/1, time/2]).
--export([utc_timestamp/0, get_value_from_options/2, get_local_purge_doc_id/1, get_local_purge_doc_body/4]).
+-export([get_value_from_options/2, get_local_purge_doc_id/1, get_local_purge_doc_body/4]).
 
 get_shards(DbName, #index_query_args{stale=ok}) ->
     mem3:ushards(DbName);
@@ -167,13 +167,6 @@ time(Metric, {M, F, A}) when is_list(Metric) ->
         couch_stats:update_histogram([dreyfus | Metric],  Length)
     end.
 
-utc_timestamp() ->
-    {{Year, Month, Day}, {Hour, Min, Sec}} =
-        calendar:now_to_universal_time(os:timestamp()),
-    lists:flatten(
-        io_lib:format("~.4.0w-~.2.0w-~.2.0wT~.2.0w:~.2.0w:~.2.0wZ",
-            [Year, Month, Day, Hour, Min, Sec])).
-
 get_value_from_options(Key, Options) ->
     case couch_util:get_value(Key, Options) of
         undefined ->
@@ -183,7 +176,7 @@ get_value_from_options(Key, Options) ->
     end.
 
 get_local_purge_doc_id(Sig) ->
-    <<?LOCAL_DOC_PREFIX, "purge-search-", Sig/binary>>.
+    <<?LOCAL_DOC_PREFIX, "purge-dreyfus-", Sig/binary>>.
 
 get_local_purge_doc_body(Db, LocalDocId, PurgeSeq, Index) ->
     #index{
@@ -194,16 +187,16 @@ get_local_purge_doc_body(Db, LocalDocId, PurgeSeq, Index) ->
     JsonList = {[
         {<<"_id">>, LocalDocId},
         {<<"purge_seq">>, PurgeSeq},
-        {<<"timestamp_utc">>, list_to_binary(dreyfus_util:utc_timestamp())},
+        {<<"timestamp_utc">>, list_to_binary(couch_util:utc_string())},
         {<<"verify_module">>, <<"dreyfus_index">>},
         {<<"verify_function">>, <<"verify_index_exists">>},
         {<<"verify_options">>, {[
-            {<<"db_name">>, Db#db.name},
-            {<<"index_name">>, IdxName},
+            {<<"dbname">>, Db#db.name},
+            {<<"indexname">>, IdxName},
             {<<"ddoc_id">>, DDocId},
-            {<<"sig">>, Sig}
+            {<<"signature">>, Sig}
         ]}},
-        {<<"type">>, <<"search">>}
+        {<<"type">>, <<"dreyfus">>}
     ]},
     couch_doc:from_json_obj(JsonList).
 

@@ -469,26 +469,30 @@ test_local_doc() ->
 
     {ok, _, HitCount1, _, _, _} = dreyfus_search(DbName, <<"apple">>),
     ?assertEqual(HitCount1, 1),
-    purge_docs(DbName, [<<"apple">>, <<"tomato">>]),
+    purge_docs(DbName, [<<"apple">>, <<"tomato">>, <<"cherry">>, <<"strawberry">>]),
     {ok, _, HitCount2, _, _, _} = dreyfus_search(DbName, <<"apple">>),
     ?assertEqual(HitCount2, 0),
 
     %get local doc
     [Sig|_] = get_sigs(DbName),
     LocalId = dreyfus_util:get_local_purge_doc_id(Sig),
-    {ok, LDoc} = fabric:open_doc(DbName, LocalId, []),
-    {Props} = couch_doc:to_json_obj(LDoc, []),
-
-    %check local doc content
-    dreyfus_util:get_value_from_options(<<"timestamp_utc">>, Props),
-    dreyfus_util:get_value_from_options(<<"verify_function">>, Props),
-    dreyfus_util:get_value_from_options(<<"verify_options">>, Props),
-    PurgeSeq = dreyfus_util:get_value_from_options(<<"purge_seq">>, Props),
-    VerifuModule = dreyfus_util:get_value_from_options(<<"verify_module">>, Props),
-    Type = dreyfus_util:get_value_from_options(<<"type">>, Props),
-    ?assertEqual(2, PurgeSeq),
-    ?assertEqual(<<"dreyfus_index">>, VerifuModule),
-    ?assertEqual(<<"search">>, Type),
+    LocalShards = mem3:local_shards(DbName),
+    PurgeSeqs = lists:map(fun(Shard) ->
+        {ok, Db} = couch_db:open_int(Shard#shard.name, [?ADMIN_CTX]),
+        {ok, LDoc} = couch_db:open_doc(Db, LocalId, []),
+        {Props} = couch_doc:to_json_obj(LDoc, []),
+        dreyfus_util:get_value_from_options(<<"timestamp_utc">>, Props),
+        dreyfus_util:get_value_from_options(<<"verify_function">>, Props),
+        dreyfus_util:get_value_from_options(<<"verify_options">>, Props),
+        PurgeSeq = dreyfus_util:get_value_from_options(<<"purge_seq">>, Props),
+        VerifuModule = dreyfus_util:get_value_from_options(<<"verify_module">>, Props),
+        Type = dreyfus_util:get_value_from_options(<<"type">>, Props),
+        ?assertEqual(<<"dreyfus_index">>, VerifuModule),
+        ?assertEqual(<<"dreyfus">>, Type),
+        couch_db:close(Db),
+        PurgeSeq
+    end, LocalShards),
+    ?assertEqual(lists:sum(PurgeSeqs), 4),
 
     delete_db(DbName),
     ok.
@@ -542,34 +546,34 @@ test_verify_index_exists_failed() ->
     {Props} = couch_doc:to_json_obj(LDoc, []),
     {Options} = dreyfus_util:get_value_from_options(<<"verify_options">>, Props),
     OptionsDbErr = [
-        {<<"db_name">>, <<"shards/00000000-ffffffff/testdb.1234567890">>},
-        {<<"index_name">>, dreyfus_util:get_value_from_options(<<"index_name">>, Options)},
+        {<<"dbname">>, <<"shards/00000000-ffffffff/testdb.1234567890">>},
+        {<<"indexname">>, dreyfus_util:get_value_from_options(<<"indexname">>, Options)},
         {<<"ddoc_id">>, dreyfus_util:get_value_from_options(<<"ddoc_id">>, Options)},
-        {<<"sig">>, dreyfus_util:get_value_from_options(<<"sig">>, Options)}
+        {<<"signature">>, dreyfus_util:get_value_from_options(<<"signature">>, Options)}
     ],
     ?assertEqual(false, dreyfus_index:verify_index_exists(OptionsDbErr)),
 
     OptionsIdxErr = [
-        {<<"db_name">>, dreyfus_util:get_value_from_options(<<"db_name">>, Options)},
-        {<<"index_name">>, <<"someindex">>},
+        {<<"dbname">>, dreyfus_util:get_value_from_options(<<"dbname">>, Options)},
+        {<<"indexname">>, <<"someindex">>},
         {<<"ddoc_id">>, dreyfus_util:get_value_from_options(<<"ddoc_id">>, Options)},
-        {<<"sig">>, dreyfus_util:get_value_from_options(<<"sig">>, Options)}
+        {<<"signature">>, dreyfus_util:get_value_from_options(<<"signature">>, Options)}
     ],
     ?assertEqual(false, dreyfus_index:verify_index_exists(OptionsIdxErr)),
 
     OptionsDDocErr = [
-        {<<"db_name">>, dreyfus_util:get_value_from_options(<<"db_name">>, Options)},
-        {<<"index_name">>, dreyfus_util:get_value_from_options(<<"index_name">>, Options)},
+        {<<"dbname">>, dreyfus_util:get_value_from_options(<<"dbname">>, Options)},
+        {<<"indexname">>, dreyfus_util:get_value_from_options(<<"indexname">>, Options)},
         {<<"ddoc_id">>, <<"somedesigndoc">>},
-        {<<"sig">>, dreyfus_util:get_value_from_options(<<"sig">>, Options)}
+        {<<"signature">>, dreyfus_util:get_value_from_options(<<"signature">>, Options)}
     ],
     ?assertEqual(false, dreyfus_index:verify_index_exists(OptionsDDocErr)),
 
     OptionsSigErr = [
-        {<<"db_name">>, dreyfus_util:get_value_from_options(<<"db_name">>, Options)},
-        {<<"index_name">>, dreyfus_util:get_value_from_options(<<"index_name">>, Options)},
+        {<<"dbname">>, dreyfus_util:get_value_from_options(<<"dbname">>, Options)},
+        {<<"indexname">>, dreyfus_util:get_value_from_options(<<"indexname">>, Options)},
         {<<"ddoc_id">>, dreyfus_util:get_value_from_options(<<"ddoc_id">>, Options)},
-        {<<"sig">>, <<"12345678901234567890123456789012">>}
+        {<<"signature">>, <<"12345678901234567890123456789012">>}
     ],
     ?assertEqual(false, dreyfus_index:verify_index_exists(OptionsSigErr)),
 
@@ -608,7 +612,6 @@ test_purge_search() ->
     ?assertEqual(HitCount, 2),
     delete_db(DbName),
     ok.
-
 
 %private API
 db_name() ->

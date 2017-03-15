@@ -18,7 +18,6 @@
 -include("dreyfus.hrl").
 -include_lib("mem3/include/mem3.hrl").
 -include_lib("couch/include/couch_db.hrl").
--include_lib("couch_mrview/include/couch_mrview.hrl").
 
 -export([go/1]).
 
@@ -57,8 +56,13 @@ cleanup_local_purge_doc(DbName, ActiveSigs) ->
     DeleteDocs = lists:map(fun(IdxDir) ->
         IdxDirList = filename:split(IdxDir),
         [Sig] = lists:nthtail(length(IdxDirList)-1, IdxDirList),
-        DocId = dreyfus_util:get_local_purge_doc_id(Sig),
-        #doc{id = DocId, deleted=true}
+        case re:run(Sig, "^[a-fA-F0-9]+$" ,[{capture, none}]) of
+            match ->
+                DocId = dreyfus_util:get_local_purge_doc_id(Sig),
+                #doc{id = DocId, deleted=true};
+            _ ->
+                []
+        end
     end, DeadDirs),
-    fabric:update_docs(DbName, DeleteDocs, [?ADMIN_CTX]),
+    fabric:update_docs(DbName, lists:flatten(DeleteDocs), [?ADMIN_CTX]),
     ok.

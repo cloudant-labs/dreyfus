@@ -385,21 +385,15 @@ info_int(Pid) ->
     clouseau_rpc:info(Pid).
 
 verify_index_exists(Options) ->
-    DbName = dreyfus_util:get_value_from_options(<<"db_name">>, Options),
+    DbName0 = dreyfus_util:get_value_from_options(<<"dbname">>, Options),
     DDocId = dreyfus_util:get_value_from_options(<<"ddoc_id">>, Options),
-    IdxName = dreyfus_util:get_value_from_options(<<"index_name">>, Options),
-    Sig = dreyfus_util:get_value_from_options(<<"sig">>, Options),
-    case couch_db:open_int(DbName, []) of
-        {ok, Db} ->
-            try
-                {ok, DDoc} = couch_db:open_doc(Db, DDocId, []),
-                {ok, Index} = dreyfus_index:design_doc_to_index(DDoc, IdxName),
-                Sig == Index#index.sig
-            catch _:_ ->
-                false
-            after
-                couch_db:close(Db)
-            end;
-        _ ->
-            false
+    IdxName = dreyfus_util:get_value_from_options(<<"indexname">>, Options),
+    Sig = dreyfus_util:get_value_from_options(<<"signature">>, Options),
+    try
+        DbName = mem3:dbname(DbName0),
+        {ok, DDoc} = ddoc_cache:open(DbName, DDocId),
+        {ok, Index} = dreyfus_index:design_doc_to_index(DDoc, IdxName),
+        Sig == Index#index.sig
+    catch _:_ ->
+        false
     end.
