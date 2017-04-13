@@ -22,6 +22,7 @@
 -export([group1/7, group2/8, group2/2]).
 -export([delete/2, update/3, cleanup/1, cleanup/2]).
 -export([analyze/2, version/0]).
+-export([set_purge_seq/2, get_purge_seq/1]).
 
 open_index(Peer, Path, Analyzer) ->
     rpc({main, clouseau()}, {open, Peer, Path, Analyzer}).
@@ -37,6 +38,12 @@ info(Ref) ->
 
 get_update_seq(Ref) ->
     rpc(Ref, get_update_seq).
+
+set_purge_seq(Ref, Seq) ->
+    rpc(Ref, {set_purge_seq, Seq}).
+
+get_purge_seq(Ref) ->
+    rpc(Ref, get_purge_seq).
 
 %% @deprecated
 search(Ref, Query, Limit, Refresh, Bookmark, Sort) ->
