@@ -25,7 +25,7 @@
 % public api.
 -export([start_link/2, design_doc_to_index/2, await/2, search/2, info/1,
          group1/2, group2/2,
-         design_doc_to_indexes/1]).
+         design_doc_to_indexes/1, verify_index_exists/1]).
 
 % gen_server api.
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -109,6 +109,7 @@ init({DbName, Index}) ->
             case couch_db:open_int(DbName, []) of
                 {ok, Db} ->
                     try couch_db:monitor(Db) after couch_db:close(Db) end,
+                    maybe_create_local_purge_doc(Db, Pid, Index),
                     proc_lib:init_ack({ok, self()}),
                     gen_server:enter_loop(?MODULE, [], State);
                 Error ->
@@ -116,6 +117,19 @@ init({DbName, Index}) ->
             end;
         Error ->
             proc_lib:init_ack(Error)
+    end.
+
+maybe_create_local_purge_doc(Db, IndexPid, Index) ->
+    DocId = dreyfus_util:get_local_purge_doc_id(Index#index.sig),
+    case couch_db:open_doc(Db, DocId) of
+        {not_found, _} ->
+            DbPurgeSeq = couch_db:get_purge_seq(Db),
+            clouseau_rpc:set_purge_seq(IndexPid, DbPurgeSeq),
+            DocContent = dreyfus_util:get_local_purge_doc_body(
+                Db, DocId, DbPurgeSeq, Index),
+            couch_db:update_doc(Db, DocContent, []);
+        _ ->
+            ok
     end.
 
 handle_call({await, RequestSeq}, From,
@@ -369,3 +383,17 @@ group2_int(Pid, QueryArgs0) ->
 
 info_int(Pid) ->
     clouseau_rpc:info(Pid).
+
+verify_index_exists(Options) ->
+    DbName0 = dreyfus_util:get_value_from_options(<<"dbname">>, Options),
+    DDocId = dreyfus_util:get_value_from_options(<<"ddoc_id">>, Options),
+    IdxName = dreyfus_util:get_value_from_options(<<"indexname">>, Options),
+    Sig = dreyfus_util:get_value_from_options(<<"signature">>, Options),
+    try
+        DbName = mem3:dbname(DbName0),
+        {ok, DDoc} = ddoc_cache:open(DbName, DDocId),
+        {ok, Index} = dreyfus_index:design_doc_to_index(DDoc, IdxName),
+        Sig == Index#index.sig
+    catch _:_ ->
+        false
+    end.

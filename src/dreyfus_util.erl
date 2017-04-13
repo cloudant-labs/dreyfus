@@ -20,6 +20,7 @@
 -include_lib("couch/include/couch_db.hrl").
 
 -export([get_shards/2, sort/2, upgrade/1, export/1, time/2]).
+-export([get_value_from_options/2, get_local_purge_doc_id/1, get_local_purge_doc_body/4]).
 
 get_shards(DbName, #index_query_args{stale=ok}) ->
     mem3:ushards(DbName);
@@ -165,6 +166,39 @@ time(Metric, {M, F, A}) when is_list(Metric) ->
         Length = timer:now_diff(os:timestamp(), Start) / 1000,
         couch_stats:update_histogram([dreyfus | Metric],  Length)
     end.
+
+get_value_from_options(Key, Options) ->
+    case couch_util:get_value(Key, Options) of
+        undefined ->
+            Reason = binary_to_list(Key) ++ " must exist in Options.",
+            throw({bad_request, Reason});
+        Value -> Value
+    end.
+
+get_local_purge_doc_id(Sig) ->
+    <<?LOCAL_DOC_PREFIX, "purge-dreyfus-", Sig/binary>>.
+
+get_local_purge_doc_body(Db, LocalDocId, PurgeSeq, Index) ->
+    #index{
+        name = IdxName,
+        ddoc_id = DDocId,
+        sig = Sig
+    } = Index,
+    JsonList = {[
+        {<<"_id">>, LocalDocId},
+        {<<"purge_seq">>, PurgeSeq},
+        {<<"timestamp_utc">>, list_to_binary(couch_util:utc_string())},
+        {<<"verify_module">>, <<"dreyfus_index">>},
+        {<<"verify_function">>, <<"verify_index_exists">>},
+        {<<"verify_options">>, {[
+            {<<"dbname">>, Db#db.name},
+            {<<"indexname">>, IdxName},
+            {<<"ddoc_id">>, DDocId},
+            {<<"signature">>, Sig}
+        ]}},
+        {<<"type">>, <<"dreyfus">>}
+    ]},
+    couch_doc:from_json_obj(JsonList).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
