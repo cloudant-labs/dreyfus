@@ -157,8 +157,25 @@ handle_call(info, _From, State) -> % obsolete
     Reply = info_int(State#state.index_pid),
     {reply, Reply, State}.
 
+handle_cast({ddoc_updated, DDocResult}, #state{} = State) ->
+    #index{sig = Sig, dbname = DbName} = State#state.index,
+    case check_if_index_is_deleted(DbName, DDocResult, Sig) of
+        true ->
+            % The intention of this arbitrary delay is to avoid the errors caused by deleting an index while it's being queried. Currently there is no easy way to identify the pids that are waiting for indexing vs the pids that are actively querying, hence we chose this approach to shutdown the index after the delay.
+            erlang:send_after(index_shutdown_delay(), self(), index_deleted),
+            {noreply, State};
+        false ->
+            {noreply, State}
+    end;
+
 handle_cast(_Msg, State) ->
     {noreply, State}.
+
+handle_info(index_deleted, State) ->
+    #state{index=Index} = State,
+    couch_log:notice("Shutting down index for ~s. It is either deleted or invalidated with the update to it's design document",
+    [index_name(Index)]),
+    {stop, {shutdown, ddoc_updated}, State};
 
 handle_info({'EXIT', FromPid, {updated, NewSeq}},
             #state{
@@ -214,13 +231,61 @@ handle_info({'DOWN',_,_,Pid,Reason}, #state{
     [gen_server:reply(P, {error, Reason}) || {P, _} <- WaitList],
     {stop, normal, State}.
 
-terminate(_Reason, _State) ->
-    ok.
+terminate(Reason, State) ->
+    case Reason of
+        {shutdown, ddoc_updated} ->
+            send_all(State#state.waiting_list, ddoc_updated);
+        _ ->
+            ok
+    end.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 % private functions.
+send_all(Waiters, Reply) ->
+    [gen_server:reply(From, Reply) || {From, _} <- Waiters].
+
+check_if_index_is_deleted(DbName, DDocResult, CurrentSig) ->
+    case DDocResult of
+        {not_found, deleted} ->
+            IndicesWithSig = indices_with_sig_from_other_ddocs(DbName, CurrentSig);
+        {ok, DDoc} ->
+            case indices_matching_sig({DDoc, CurrentSig}) of
+              [] ->
+                  % check if index is referred from other ddocs
+                  IndicesWithSig = indices_with_sig_from_other_ddocs(DbName, CurrentSig);
+              IndicesWithSig ->
+                  IndicesWithSig
+            end
+    end,
+
+    case IndicesWithSig of
+        [] ->
+            true;
+        [_H | _T] ->
+            false
+    end.
+
+indices_with_sig_from_other_ddocs(DbName, CurrentSig) ->
+    {ok, DesignDocs} = fabric:design_docs(mem3:dbname(DbName)),
+    ActiveSigs = lists:usort(lists:flatmap(
+      fun indices_matching_sig/1,
+        [{couch_doc:from_json_obj(DD), CurrentSig} || DD <- DesignDocs])),
+    ActiveSigs.
+
+indices_matching_sig({#doc{body={Fields}}=Doc, CurrentSig}) ->
+    {RawIndexes} = couch_util:get_value(<<"indexes">>, Fields, {[]}),
+    {IndexNames, _} = lists:unzip(RawIndexes),
+    lists:filter(fun check_if_index_matches_sig/1, [{Doc, IndexName, CurrentSig} || IndexName <- IndexNames]).
+
+check_if_index_matches_sig({Doc, IndexName, Sig}) ->
+  case design_doc_to_index(Doc, IndexName) of
+      {ok, #index{sig=Sig_New}} when Sig_New =/= Sig ->
+          false;
+      {ok, #index{sig=Sig_New}} when Sig_New =:= Sig ->
+          true
+  end.
 
 open_index(DbName, #index{analyzer=Analyzer, sig=Sig}) ->
     Path = <<DbName/binary,"/",Sig/binary>>,
@@ -366,6 +431,9 @@ group2_int(Pid, QueryArgs0) ->
             Props = args_to_proplist2(QueryArgs),
             clouseau_rpc:group2(Pid, Props)
     end.
+
+index_shutdown_delay() ->
+  config:get_integer("dreyfus", "index_shutdown_delay", 30000). % 30 seconds
 
 info_int(Pid) ->
     clouseau_rpc:info(Pid).
