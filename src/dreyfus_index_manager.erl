@@ -84,8 +84,13 @@ handle_call({open_error, DbName, Sig, Error}, {OpenerPid, _}, State) ->
     ets:delete(?BY_SIG, {DbName, Sig}),
     {reply, ok, State}.
 
-handle_cast({cleanup, DbName}, State) ->
-    clouseau_rpc:cleanup(DbName),
+handle_cast(Msg, State) ->
+    case Msg of
+        {cleanup, DbName} ->
+            clouseau_rpc:cleanup(DbName);
+        {move, DbName} ->
+            clouseau_rpc:move(DbName)
+    end,
     {noreply, State}.
 
 handle_info({'EXIT', FromPid, Reason}, State) ->
@@ -119,7 +124,15 @@ handle_db_event(DbName, created, _St) ->
     gen_server:cast(?MODULE, {cleanup, DbName}),
     {ok, nil};
 handle_db_event(DbName, deleted, _St) ->
-    gen_server:cast(?MODULE, {cleanup, DbName}),
+    DoRecovery = config:get_boolean("couchdb",
+        "enable_database_recovery", false),
+    case DoRecovery of
+        true ->
+            gen_server:cast(?MODULE, {move, DbName});
+        false ->
+            gen_server:cast(?MODULE, {cleanup, DbName})
+    end,
+
     {ok, nil};
 handle_db_event(_DbName, _Event, _St) ->
     {ok, nil}.
