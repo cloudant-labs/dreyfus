@@ -89,7 +89,9 @@ handle_cast({cleanup, DbName}, State) ->
     {noreply, State};
 
 handle_cast({move, DbName}, State) ->
-    clouseau_rpc:move(DbName),
+    RecoveryDir = config:get("couchdb", "recovery_index_dir", ".recovery"),
+    DestPath = filename:join([RecoveryDir, DbName]),
+    clouseau_rpc:move(DbName, DestPath),
     {noreply, State}.
 
 handle_info({'EXIT', FromPid, Reason}, State) ->
