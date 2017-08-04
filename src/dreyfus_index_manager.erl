@@ -89,13 +89,7 @@ handle_cast({cleanup, DbName}, State) ->
     {noreply, State};
 
 handle_cast({move, DbName}, State) ->
-    SearchIdxDir = config:get("couchdb",
-        "search_index_dir", "/srv/search_index"),
-    SearchIdxRecoveryDir = config:get("couchdb",
-        "search_index_recovery_dir", "/srv/search_index/.recovery"),
-    SrcPath = filename:join([SearchIdxDir, DbName]),
-    DestPath = filename:join([SearchIdxRecoveryDir, DbName]),
-    clouseau_rpc:move(SrcPath, DestPath),
+    clouseau_rpc:move(DbName),
     {noreply, State}.
 
 handle_info({'EXIT', FromPid, Reason}, State) ->
