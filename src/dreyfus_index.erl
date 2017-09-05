@@ -157,10 +157,9 @@ handle_call(info, _From, State) -> % obsolete
     Reply = info_int(State#state.index_pid),
     {reply, Reply, State}.
 
-
 handle_cast({ddoc_updated, DDocResult}, #state{} = State) ->
     #index{sig = Sig} = State#state.index,
-    KeepIndex = case DDocResult of
+    KeepIndexProcess = case DDocResult of
         {not_found, deleted} ->
             false;
         {ok, DDoc} ->
@@ -170,7 +169,7 @@ handle_cast({ddoc_updated, DDocResult}, #state{} = State) ->
                 (SigNew == Sig) or Acc
             end, false, Indexes)
     end,
-    case KeepIndex of
+    case KeepIndexProcess of
         false ->
             {stop, {shutdown, ddoc_updated}, State};
         true ->
@@ -178,7 +177,6 @@ handle_cast({ddoc_updated, DDocResult}, #state{} = State) ->
     end;
 handle_cast(_Msg, State) ->
     {noreply, State}.
-
 
 handle_info({'EXIT', FromPid, {updated, NewSeq}},
             #state{
@@ -234,14 +232,11 @@ handle_info({'DOWN',_,_,Pid,Reason}, #state{
     [gen_server:reply(P, {error, Reason}) || {P, _} <- WaitList],
     {stop, normal, State}.
 
-terminate(Reason, State) ->
-    case Reason of
-        {shutdown, ddoc_updated} ->
-            Waiters = State#state.waiting_list,
-            [gen_server:reply(From, ddoc_updated) || {From, _} <- Waiters];
-        _ ->
-            ok
-    end.
+terminate({shutdown, ddoc_updated}, State) ->
+    Waiters = State#state.waiting_list,
+    [gen_server:reply(From, ddoc_updated) || {From, _} <- Waiters];
+terminate(_Reason, _State) ->
+    ok.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.

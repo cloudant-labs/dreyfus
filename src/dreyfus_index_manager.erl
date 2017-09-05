@@ -122,14 +122,14 @@ code_change(_OldVsn, nil, _Extra) ->
 
 % private functions
 
-handle_db_event(DbName, created, _St) ->
+handle_db_event(DbName, created, St) ->
     gen_server:cast(?MODULE, {cleanup, DbName}),
-    {ok, nil};
-handle_db_event(DbName, deleted, _St) ->
+    {ok, St};
+handle_db_event(DbName, deleted, St) ->
     gen_server:cast(?MODULE, {cleanup, DbName}),
-    {ok, nil};
+    {ok, St};
 handle_db_event(<<"shards/", _/binary>> = DbName, {ddoc_updated,
-        DDocId}, _St) ->
+        DDocId}, St) ->
     DDocResult = couch_util:with_db(DbName, fun(Db) ->
         couch_db:open_doc(Db, DDocId, [ejson_body, ?ADMIN_CTX])
     end),
@@ -152,7 +152,7 @@ handle_db_event(<<"shards/", _/binary>> = DbName, {ddoc_updated,
             end
         end, ets:match_object(?BY_DB, {DbShard, {DDocId, '_'}}))
     end, DbShards),
-    {ok, nil};
+    {ok, St};
 handle_db_event(DbName, {ddoc_updated, DDocId}, St) ->
     DDocResult = couch_util:with_db(DbName, fun(Db) ->
         couch_db:open_doc(Db, DDocId, [ejson_body, ?ADMIN_CTX])
