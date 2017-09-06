@@ -18,35 +18,66 @@
 
 -define(DDOCID1, <<"_design/ddoc1">>).
 -define(DDOCID2, <<"_design/ddoc2">>).
--define(IDXNAME, <<"index1">>).
+-define(DDOCID3, <<"_design/ddoc3">>).
 
--define(DDOC1, {[
+-define(IDXNAME, <<"index1">>).
+-define(IDXNAME2, <<"index2">>).
+
+-define(DDOC1, couch_doc:from_json_obj({[
     {<<"_id">>,?DDOCID1},
     {<<"indexes">>, {[
         {?IDXNAME, {[
-            {<<"index">>, <<"function(doc){if(doc.f){index(\\\"f\\\", doc.f);}}">>}
+            {<<"index">>,
+                <<"function(doc){if(doc.f){index(\\\"f\\\", doc.f);}}">>}
         ]}}
     ]}}
-]}).
+]})).
 
--define(DDOC2, {[
+-define(DDOC2, couch_doc:from_json_obj({[
     {<<"_id">>, ?DDOCID2},
     {<<"indexes">>, {[
         {?IDXNAME, {[
-            {<<"index">>, <<"function(doc){if(doc.f){index(\\\"f\\\", doc.f);}}">>}
+            {<<"index">>,
+                <<"function(doc){if(doc.f){index(\\\"f\\\", doc.f);}}">>}
         ]}}
     ]}}
-]}).
+]})).
+
+-define(DDOC3, couch_doc:from_json_obj({[
+    {<<"_id">>, ?DDOCID3},
+    {<<"indexes">>, {[
+        {?IDXNAME, {[
+            {<<"index">>,
+                <<"function(doc){if(doc.f1){index(\\\"f1\\\", doc.f1);}}">>}
+        ]}},
+        {?IDXNAME2, {[
+            {<<"index">>,
+                <<"function(doc){if(doc.f2){index(\\\"f2\\\", doc.f2);}}">>}
+        ]}}
+    ]}}
+]})).
+
+
+-define(DDOC31IND,
+   {[
+        {?IDXNAME, {[
+            {<<"index">>,
+                <<"function(doc){if(doc.f11){index(\\\"f11\\\", doc.f11);}}">>}
+        ]}},
+        {?IDXNAME2, {[
+            {<<"index">>,
+                <<"function(doc){if(doc.f2){index(\\\"f2\\\", doc.f2);}}">>}
+        ]}}
+    ]}
+).
+
 
 
 setup() ->
     Name = ?tempdb(),
     couch_server:delete(Name, [?ADMIN_CTX]),
     {ok, Db} = couch_db:create(Name, [?ADMIN_CTX]),
-    DDoc1 = couch_doc:from_json_obj(?DDOC1),
-    {ok, _} = couch_db:update_docs(Db, [DDoc1], []),
-    {ok, Db2} = couch_db:reopen(Db),
-    Db2.
+    Db.
 
 teardown(Db) ->
     couch_db:close(Db),
@@ -77,17 +108,21 @@ ddoc_update_test_() ->
                 fun setup/0, fun teardown/1,
                 [
                     fun should_stop_indexes_on_delete_single_ddoc/1,
-                    fun should_not_stop_indexes_on_delete_multiple_ddoc/1
+                    fun should_not_stop_indexes_on_delete_multiple_ddoc/1,
+                    fun should_stop_indexes_on_update/1
                 ]
             }
         }
     }.
 
 
-should_stop_indexes_on_delete_single_ddoc(Db) ->
+should_stop_indexes_on_delete_single_ddoc(Db0) ->
     ?_test(begin
+        {ok, _} = couch_db:update_docs(Db0, [?DDOC1], []),
+        {ok, Db} = couch_db:reopen(Db0),
         {ok, DDoc1} = couch_db:open_doc(
             Db, ?DDOCID1, [ejson_body, ?ADMIN_CTX]),
+
         dreyfus_rpc:call(
             search, Db#db.name, DDoc1, ?IDXNAME, #index_query_args{}),
         IndsBefore = get_indexes_by_ddoc(Db#db.name, ?DDOCID1, 1),
@@ -111,20 +146,21 @@ should_stop_indexes_on_delete_single_ddoc(Db) ->
     end).
 
 
-should_not_stop_indexes_on_delete_multiple_ddoc(Db) ->
+should_not_stop_indexes_on_delete_multiple_ddoc(Db0) ->
     ?_test(begin
-         % create DDOC2 with the same Sig as DDOC1
-        DDoc2 = couch_doc:from_json_obj(?DDOC2),
-        {ok, _} = couch_db:update_docs(Db, [DDoc2], []),
-        {ok, Db2} = couch_db:reopen(Db),
-
+        % create DDOC1 and DDOC2 with the same Sig
+        {ok, _} = couch_db:update_docs(Db0, [?DDOC1, ?DDOC2], []),
+        {ok, Db} = couch_db:reopen(Db0),
         {ok, DDoc1} = couch_db:open_doc(
-            Db2, ?DDOCID1, [ejson_body, ?ADMIN_CTX]),
+            Db, ?DDOCID1, [ejson_body, ?ADMIN_CTX]),
+        {ok, DDoc2} = couch_db:open_doc(
+            Db, ?DDOCID2, [ejson_body, ?ADMIN_CTX]),
+
         dreyfus_rpc:call(
-            search, Db2#db.name, DDoc1, ?IDXNAME, #index_query_args{}),
+            search, Db#db.name, DDoc1, ?IDXNAME, #index_query_args{}),
         dreyfus_rpc:call(
-            search, Db2#db.name, DDoc2, ?IDXNAME, #index_query_args{}),
-        IndsBefore = get_indexes_by_ddoc(Db2#db.name, ?DDOCID1, 1),
+            search, Db#db.name, DDoc2, ?IDXNAME, #index_query_args{}),
+        IndsBefore = get_indexes_by_ddoc(Db#db.name, ?DDOCID1, 1),
         ?assertEqual(1, length(IndsBefore)),
         AliveBefore = lists:filter(fun erlang:is_process_alive/1, IndsBefore),
         ?assertEqual(1, length(AliveBefore)),
@@ -135,10 +171,43 @@ should_not_stop_indexes_on_delete_multiple_ddoc(Db) ->
            {<<"_deleted">>, true},
            {<<"_rev">>, couch_doc:rev_to_str(DDoc1#doc.revs)}
         ]}),
-        {ok, _} = couch_db:update_doc(Db2, DDocJson11, []),
+        {ok, _} = couch_db:update_doc(Db, DDocJson11, []),
 
         %% assert that previously running indexes are still there
-        IndsAfter = get_indexes_by_ddoc(Db2#db.name, ?DDOCID1, 1),
+        IndsAfter = get_indexes_by_ddoc(Db#db.name, ?DDOCID1, 1),
+        ?assertEqual(1, length(IndsAfter)),
+        AliveAfter = lists:filter(fun erlang:is_process_alive/1, IndsBefore),
+        ?assertEqual(1, length(AliveAfter))
+    end).
+
+
+should_stop_indexes_on_update(Db0) ->
+     ?_test(begin
+        {ok, _} = couch_db:update_docs(Db0, [?DDOC3], []),
+        {ok, Db} = couch_db:reopen(Db0),
+        {ok, DDoc3} = couch_db:open_doc(
+            Db, ?DDOCID3, [ejson_body, ?ADMIN_CTX]),
+
+        dreyfus_rpc:call(
+            search, Db#db.name, DDoc3, ?IDXNAME, #index_query_args{}),
+        dreyfus_rpc:call(
+            search, Db#db.name, DDoc3, ?IDXNAME2, #index_query_args{}),
+        IndsBefore = get_indexes_by_ddoc(Db#db.name, ?DDOCID3, 2),
+        ?assertEqual(2, length(IndsBefore)),
+        AliveBefore = lists:filter(fun erlang:is_process_alive/1, IndsBefore),
+        ?assertEqual(2, length(AliveBefore)),
+
+        % update <<"index1">> of DDoc3
+        DDocJson31 = couch_doc:from_json_obj({[
+           {<<"_id">>, ?DDOCID3},
+           {<<"indexes">>, ?DDOC31IND},
+           {<<"_rev">>, couch_doc:rev_to_str(DDoc3#doc.revs)}
+        ]}),
+        {ok, _} = couch_db:update_doc(Db, DDocJson31, []),
+
+        %% assert that one index process is gone (for <<"index1">>),
+        %% and one is still running (for <<"index2>>")
+        IndsAfter = get_indexes_by_ddoc(Db#db.name, ?DDOCID3, 1),
         ?assertEqual(1, length(IndsAfter)),
         AliveAfter = lists:filter(fun erlang:is_process_alive/1, IndsBefore),
         ?assertEqual(1, length(AliveAfter))
