@@ -157,6 +157,24 @@ handle_call(info, _From, State) -> % obsolete
     Reply = info_int(State#state.index_pid),
     {reply, Reply, State}.
 
+handle_cast({ddoc_updated, DDocResult}, #state{} = State) ->
+    #index{sig = Sig} = State#state.index,
+    KeepIndexProcess = case DDocResult of
+        {not_found, deleted} ->
+            false;
+        {ok, DDoc} ->
+            Indexes = design_doc_to_indexes(DDoc),
+            % find if any index of new DDoc has the same Sig
+            lists:foldl(fun(#index{sig=SigNew}, Acc) ->
+                (SigNew == Sig) or Acc
+            end, false, Indexes)
+    end,
+    case KeepIndexProcess of
+        false ->
+            {stop, {shutdown, ddoc_updated}, State};
+        true ->
+            {noreply, State}
+    end;
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -214,6 +232,9 @@ handle_info({'DOWN',_,_,Pid,Reason}, #state{
     [gen_server:reply(P, {error, Reason}) || {P, _} <- WaitList],
     {stop, normal, State}.
 
+terminate({shutdown, ddoc_updated}, State) ->
+    Waiters = State#state.waiting_list,
+    [gen_server:reply(From, ddoc_updated) || {From, _} <- Waiters];
 terminate(_Reason, _State) ->
     ok.
 
