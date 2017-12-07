@@ -41,7 +41,7 @@
 }).
 
 % exported for callback.
--export([search_int/2, group1_int/2, group2_int/2, info_int/1]).
+-export([search_int/2, search_http/2, group1_int/2, group2_int/2, info_int/1]).
 
 % public functions.
 start_link(DbName, Index) ->
@@ -51,9 +51,12 @@ await(Pid, MinSeq) ->
     MFA = {gen_server, call, [Pid, {await, MinSeq}, infinity]},
     dreyfus_util:time([index, await], MFA).
 
-search(Pid0, QueryArgs) ->
+search(Pid0, QueryArgs) when is_pid(Pid0)->
     Pid = to_index_pid(Pid0),
     MFA = {?MODULE, search_int, [Pid, QueryArgs]},
+    dreyfus_util:time([index, search], MFA);
+search(Path, QueryArgs) when is_binary(Path)->
+    MFA = {?MODULE, search_http, [Path, QueryArgs]},
     dreyfus_util:time([index, search], MFA).
 
 group1(Pid0, QueryArgs) ->
@@ -329,6 +332,9 @@ search_int(Pid, QueryArgs0) ->
             Props = args_to_proplist(QueryArgs),
             clouseau_rpc:search(Pid, Props)
     end.
+
+search_http(Path, #index_query_args{q=Query}) ->
+    dreyfus_httpc:search_req(Path, Query).
 
 group1_int(Pid, QueryArgs0) ->
     QueryArgs = dreyfus_util:upgrade(QueryArgs0),
