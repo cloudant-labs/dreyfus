@@ -50,7 +50,11 @@ process_response({ok, Code, _Headers, Body}) ->
                     {Decode} = ?JSON_DECODE(Json),
                     couch_log:notice("Decode ~p", [Decode]),
                     {ok, #top_docs{
-                        hits = couch_util:get_value(<<"hit">>, Decode)
+                        update_seq = couch_util:get_value(<<"update_seq">>, Decode),
+                        total_hits = couch_util:get_value(<<"total_hits">>, Decode),
+                        hits = couch_util:get_value(<<"hit">>, Decode),
+                        counts = couch_util:get_value(<<"counts">>, Decode),
+                        ranges = couch_util:get_value(<<"ranges">>, Decode)
                     }}
             end;
         Error ->
