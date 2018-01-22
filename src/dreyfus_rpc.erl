@@ -42,36 +42,38 @@ call(Fun, DbName, DDoc, IndexName, QueryArgs0) ->
     check_interactive_mode(),
     {ok, Db} = get_or_create_db(DbName, []),
     #index_query_args{
-        stale = Stale
+        stale = Stale,
+        bookmark = Bookmark
     } = QueryArgs,
     {_LastSeq, MinSeq} = calculate_seqs(Db, Stale),
     case dreyfus_index:design_doc_to_index(DDoc, IndexName) of
         {ok, #index{sig=Sig} = Index} ->
-            % case dreyfus_index_manager:get_index(DbName, Index) of
-            %     {ok, Pid} ->
-            %         % case dreyfus_index:await(Pid, MinSeq) of
-            %         %     {ok, IndexPid, _Seq} ->
-            %         %     % obsolete clauses, remove after upgrade
-            %         %     ok ->
-            %         %         Result = dreyfus_index:Fun(Pid, QueryArgs),
-            %         %         rexi:reply(Result);
-            %         %     {ok, _Seq} ->
-            %         %         Result = dreyfus_index:Fun(Pid, QueryArgs),
-            %         %         rexi:reply(Result);
-            %         %     Error ->
-            %         %         rexi:reply(Error)
-            %         % end;
-            %         Key = get_rpc_key(pid, DbName, Sig),
-            %         Result = dreyfus_index:Fun(Key, QueryArgs),
-            %         couch_log:notice("Result ~p", [Result]),
-            %         rexi:reply(Result);
-            %     Error ->
-            %         rexi:reply(Error)
-            % end;
-            Key = get_rpc_key(pid, DbName, Sig),
-            Result = dreyfus_index:Fun(Key, QueryArgs),
-            couch_log:notice("Result ~p", [Result]),
-            rexi:reply(Result);
+            case dreyfus_index_manager:get_index(DbName, Index) of
+                {ok, Pid} ->
+                    case dreyfus_index:await(Pid, MinSeq) of
+                        {ok, IndexPid, _Seq} ->
+                            Key = get_rpc_key(pid, DbName, Sig),
+                            Result = dreyfus_index:Fun(Key, QueryArgs),
+                            couch_log:notice("Result ~p", [Result]),
+                            rexi:reply(Result);
+                        % obsolete clauses, remove after upgrade
+                        ok ->
+                            Result = dreyfus_index:Fun(Pid, QueryArgs),
+                            rexi:reply(Result);
+                        {ok, _Seq} ->
+                            Result = dreyfus_index:Fun(Pid, QueryArgs),
+                            rexi:reply(Result);
+                        Error ->
+                            rexi:reply(Error)
+                    end;
+                Error ->
+                    rexi:reply(Error)
+            end;
+            % couch_log:notice("Bookmark ~p", [Bookmark]),
+            % Key = get_rpc_key(pid, DbName, Sig),
+            % Result = dreyfus_index:Fun(Key, QueryArgs),
+            % couch_log:notice("Result ~p", [Result]),
+            % rexi:reply(Result);
         Error ->
             rexi:reply(Error)
     end.

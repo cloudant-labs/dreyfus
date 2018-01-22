@@ -23,19 +23,31 @@
 
 -define(MAX_CONNECTIONS, 10).
 -define(CLOUSEAU_HOST, "localhost").
--define(CLOUSEAU_PORT, 15985).
+-define(CLOUSEAU_PORT1, 15985).
+-define(CLOUSEAU_PORT2, 15986).
+-define(CLOUSEAU_PORT3, 15987).
 -define(CLOUSEAU_URL,
-    "http://" ++ ?CLOUSEAU_HOST ++ ":" ++ integer_to_list(?CLOUSEAU_PORT)).
+    "http://" ++ ?CLOUSEAU_HOST ++ ":").
 
 
 setup()->
-    ibrowse:set_max_sessions(?CLOUSEAU_HOST, ?CLOUSEAU_PORT, ?MAX_CONNECTIONS).
+    ibrowse:set_max_sessions(?CLOUSEAU_HOST, ?CLOUSEAU_PORT1, ?MAX_CONNECTIONS),
+    ibrowse:set_max_sessions(?CLOUSEAU_HOST, ?CLOUSEAU_PORT2, ?MAX_CONNECTIONS),
+    ibrowse:set_max_sessions(?CLOUSEAU_HOST, ?CLOUSEAU_PORT3, ?MAX_CONNECTIONS).
 
 
 search_req(Path0, Query) ->
     Path = ?b2l(base64:encode(Path0)),
-    Url = ?CLOUSEAU_URL ++ "/index/" ++ Path ++ "/search?q="++ ?b2l(Query),
-    couch_log:notice("URL ~p", [Url]), 
+    Port = case node() of
+        'node1@127.0.0.1' ->
+            ?CLOUSEAU_PORT1;
+        'node2@127.0.0.1' ->
+            ?CLOUSEAU_PORT2;
+        'node3@127.0.0.1' ->
+            ?CLOUSEAU_PORT3
+    end,
+    Url = ?CLOUSEAU_URL ++ integer_to_list(Port) ++"/index/" ++ Path ++ "/search?q="++ ?b2l(Query),
+    couch_log:notice("Node ~p, URL ~p, Port ~p", [node(), Url, Port]), 
     Resp = ibrowse:send_req(Url, [], get),
     % couch_log:notice("Resp from req resp ~p", [Resp]),
     process_response(Resp).
@@ -48,7 +60,6 @@ process_response({ok, Code, _Headers, Body}) ->
                     null;
                 Json ->
                     {Decode} = ?JSON_DECODE(Json),
-                    couch_log:notice("Decode ~p", [Decode]),
                     {ok, #top_docs{
                         update_seq = couch_util:get_value(<<"update_seq">>, Decode),
                         total_hits = couch_util:get_value(<<"total_hits">>, Decode),
