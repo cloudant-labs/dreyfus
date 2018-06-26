@@ -19,7 +19,7 @@
 -include_lib("mem3/include/mem3.hrl").
 -include_lib("couch/include/couch_db.hrl").
 
--export([get_shards/2, sort/2, upgrade/1, export/1, time/2]).
+-export([get_shards/2, sort/2, upgrade/1, export/1, time/2, in_black_list/3]).
 
 get_shards(DbName, #index_query_args{stale=ok}) ->
     mem3:ushards(DbName);
@@ -165,6 +165,12 @@ time(Metric, {M, F, A}) when is_list(Metric) ->
         Length = timer:now_diff(os:timestamp(), Start) / 1000,
         couch_stats:update_histogram([dreyfus | Metric],  Length)
     end.
+
+% if the list often becomes large, we might need to switch to a hash structure
+in_black_list(DbName, GroupId, IndexName) ->
+    BlackList = dreyfus_config_dyn:get(black_list),
+    lists:member([DbName, GroupId, IndexName], BlackList).
+
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
