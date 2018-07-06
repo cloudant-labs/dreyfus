@@ -31,12 +31,9 @@
 }).
 
 go(DbName, GroupId, IndexName, QueryArgs) when is_binary(GroupId) ->
-    {ok, DDoc} = fabric:open_doc(DbName, <<"_design/", GroupId/binary>>, [ejson_body]),
-    couch_log:notice("GroupId In Go ~p", [GroupId]),
-    case dreyfus_util:in_black_list(DbName, GroupId, IndexName) of
-        true -> throw ({bad_request, "Index is BlackListed"});
-        _ -> ok
-    end,
+    {ok, DDoc} = fabric:open_doc(DbName, <<"_design/", GroupId/binary>>,
+        [ejson_body]),
+    dreyfus_util:maybe_deny_index(DbName, GroupId, IndexName),
     go(DbName, DDoc, IndexName, QueryArgs);
 
 go(DbName, DDoc, IndexName, #index_query_args{bookmark=nil}=QueryArgs) ->

@@ -19,7 +19,9 @@
 -include_lib("mem3/include/mem3.hrl").
 -include_lib("couch/include/couch_db.hrl").
 
--export([get_shards/2, sort/2, upgrade/1, export/1, time/2, in_black_list/3]).
+-export([get_shards/2, sort/2, upgrade/1, export/1, time/2]).
+-export([in_black_list/1, in_black_list/3, maybe_deny_index/3, add_bl_element/1,
+    add_bl_element/3, remove_bl_element/1, remove_bl_element/3]).
 
 get_shards(DbName, #index_query_args{stale=ok}) ->
     mem3:ushards(DbName);
@@ -166,10 +168,69 @@ time(Metric, {M, F, A}) when is_list(Metric) ->
         couch_stats:update_histogram([dreyfus | Metric],  Length)
     end.
 
-% if the list often becomes large, we might need to switch to a hash structure
-in_black_list(DbName, GroupId, IndexName) ->
-    BlackList = dreyfus_config_dyn:get(black_list),
-    lists:member([DbName, GroupId, IndexName], BlackList).
+in_black_list(DbName, GroupId, IndexName) when is_list(DbName),
+        is_list(GroupId), is_list(IndexName) ->
+    in_black_list([DbName, GroupId, IndexName]);
+in_black_list(DbName, GroupId, IndexName) when is_binary(DbName),
+        is_binary(GroupId), is_binary(IndexName) ->
+    in_black_list([?b2l(DbName), ?b2l(GroupId), ?b2l(IndexName)]);
+in_black_list(_DbName, _GroupId, _IndexName) ->
+    false.
+
+in_black_list(IndexEntry) when is_list(IndexEntry) ->
+    BlackList = dreyfus_config:get(black_list),
+    lists:member(IndexEntry, BlackList);
+in_black_list(_IndexEntry) ->
+    false.
+
+maybe_deny_index(DbName, GroupId, IndexName) ->
+    case in_black_list(DbName, GroupId, IndexName) of
+        true ->
+            Reason = ?l2b(io_lib:format("Index <~s, ~s, ~s>, is BlackListed",
+                [?b2l(DbName), ?b2l(GroupId), ?b2l(IndexName)])),
+            throw ({bad_request, Reason});
+        _ ->
+            ok
+    end.
+
+add_bl_element(DbName, GroupId, IndexName) when is_list(DbName),
+        is_list(GroupId), is_list(IndexName) ->
+    add_bl_element([DbName, GroupId, IndexName]);
+add_bl_element(DbName, GroupId, IndexName) when is_binary(DbName),
+        is_binary(GroupId), is_binary(IndexName) ->
+    add_bl_element([?b2l(DbName), ?b2l(GroupId), ?b2l(IndexName)]).
+
+add_bl_element(IndexEntry) when is_list(IndexEntry) ->
+    BlackList = dreyfus_config:get(black_list),
+    case in_black_list(IndexEntry) of
+        true ->
+            ok;
+        false ->
+            NewList = [IndexEntry | BlackList],
+            config:set("dreyfus", "black_list", NewList)
+    end;
+add_bl_element(_IndexEntry) ->
+    ok.
+
+remove_bl_element(DbName, GroupId, IndexName) when is_list(DbName),
+        is_list(GroupId), is_list(IndexName) ->
+    remove_bl_element([DbName, GroupId, IndexName]);
+
+remove_bl_element(DbName, GroupId, IndexName) when is_binary(DbName),
+        is_binary(GroupId), is_binary(IndexName) ->
+    remove_bl_element([?b2l(DbName), ?b2l(GroupId), ?b2l(IndexName)]).
+
+remove_bl_element(IndexEntry) when is_list(IndexEntry) ->
+    BlackList = dreyfus_config:get(black_list),
+    case in_black_list(IndexEntry) of
+        true ->
+            NewList = lists:delete(IndexEntry, BlackList),
+            config:set("dreyfus", "black_list", NewList);
+        false ->
+            ok
+    end;
+remove_bl_element(_IndexEntry) ->
+    ok.
 
 
 -ifdef(TEST).
