@@ -137,7 +137,7 @@ handle_call({await, RequestSeq}, From,
                 waiting_list=[{From,RequestSeq}|WaitList]
             };
         _ ->
-            couch_log:notice("Skipping updateer", []),
+            couch_log:notice("Index Blocked from Updating - db: ~p, ddocid: ~p name: ~p", [DbName, DDocId, IdxName]),
             State
     end,
     {noreply, NewState};
@@ -190,6 +190,8 @@ handle_info({'EXIT', FromPid, {updated, NewSeq}},
         <<"_design/", GroupId/binary>> = DDocId,
         Pid = case dreyfus_util:in_black_list(DbName2, GroupId, IdxName) of
             true ->
+                couch_log:notice("Index Blocked from Updating - db: ~p, ddocid: ~p"
+                    " name: ~p", [DbName, GroupId, IdxName]),
                 nil;
             false ->
                 spawn_link(fun() ->
