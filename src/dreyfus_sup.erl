@@ -51,8 +51,21 @@ handle_config_change("dreyfus", Key, _, _, S) ->
             % the writer so we need to re-initialize.
             dreyfus_config:reconfigure()
     end,
+    notify_listeners(),
     {ok, S};
 handle_config_change(_, _, _, _, S) ->
     {ok, S}.
 handle_config_terminate(_Server, _Reason, _State) ->
     ok.
+
+
+-ifdef(TEST).
+notify_listeners() ->
+    Listeners = application:get_env(dreyfus, config_listeners, []),
+    lists:foreach(fun(L) ->
+        L ! dreyfus_config_change_finished
+    end, Listeners).
+-else.
+notify_listeners() ->
+    ok.
+-endif.
