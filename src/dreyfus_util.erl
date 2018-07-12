@@ -33,14 +33,44 @@
     verify_index_exists/2
 ]).
 
-get_shards(DbName, #index_query_args{stale=ok}) ->
-    mem3:ushards(DbName);
-get_shards(DbName, #index_query_args{stable=true}) ->
-    mem3:ushards(DbName);
-get_shards(DbName, #index_query_args{stale=false}) ->
-    mem3:shards(DbName);
+get_shards(DbName, #index_query_args{partitioned = Partitioned} = Args) ->
+    Partition = partition_docid(Args),
+    UseUshards = should_use_ushards(Args),
+    case {UseUshards, Partitioned, Partition} of
+        {true, false, _} ->
+            mem3:ushards(DbName);
+        {true, true, undefined} ->
+            mem3:ushards(DbName);
+        {true, true, Partition} ->
+            mem3:ushards(DbName, Partition);
+        {false, false, _} ->
+            mem3:shards(DbName);
+        {false, true, undefined} ->
+            mem3:shards(DbName);
+        {false, true, Partition} ->
+            mem3:shards(DbName, Partition)
+    end;
+
 get_shards(DbName, Args) ->
     get_shards(DbName, upgrade(Args)).
+
+
+should_use_ushards(#index_query_args{stale = ok}) ->
+    true;
+should_use_ushards(#index_query_args{stable = true}) ->
+    true;
+should_use_ushards(#index_query_args{}) ->
+    false.
+
+
+% create a fake docid within the specified partition.
+partition_docid(Args) ->
+    case Args#index_query_args.partition of
+        nil ->
+            undefined;
+        Partition when is_binary(Partition) ->
+            <<Partition/binary, ":foo">>
+    end.
 
 
 -spec sort(Order :: relevance | [any()], [#sortable{}]) -> [#sortable{}].
@@ -90,7 +120,7 @@ pad(List, Padding, Length) ->
 upgrade(#index_query_args{}=Args) ->
     Args;
 upgrade({index_query_args, Query, Limit, Stale, IncludeDocs, Bookmark,
-         Sort, Grouping, Stable}) ->
+         Sort, Grouping, Stable, Partitioned, Partition}) ->
     #index_query_args{
          q = Query,
          limit = Limit,
@@ -99,9 +129,11 @@ upgrade({index_query_args, Query, Limit, Stale, IncludeDocs, Bookmark,
          bookmark = Bookmark,
          sort = Sort,
          grouping = Grouping,
-         stable = Stable};
+         stable = Stable,
+         partitioned = Partitioned,
+         partition = Partition};
 upgrade({index_query_args, Query, Limit, Stale, IncludeDocs, Bookmark,
-         Sort, Grouping, Stable, Counts, Ranges, Drilldown}) ->
+         Sort, Grouping, Stable, Counts, Ranges, Drilldown, Partitioned, Partition}) ->
     #index_query_args{
          q = Query,
          limit = Limit,
@@ -113,7 +145,9 @@ upgrade({index_query_args, Query, Limit, Stale, IncludeDocs, Bookmark,
          stable = Stable,
          counts=Counts,
          ranges = Ranges,
-         drilldown = Drilldown};
+         drilldown = Drilldown,
+         partitioned = Partitioned,
+         partition = Partition};
 upgrade({index_query_args, Query, Limit, Stale, IncludeDocs, Bookmark,
          Sort, Grouping, Stable, Counts, Ranges, Drilldown,
          IncludeFields, HighlightFields, HighlightPreTag, HighlightPostTag,
@@ -150,7 +184,9 @@ export(#index_query_args{counts = nil, ranges = nil, drilldown = [],
         Args#index_query_args.bookmark,
         Args#index_query_args.sort,
         Args#index_query_args.grouping,
-        Args#index_query_args.stable
+        Args#index_query_args.stable,
+        Args#index_query_args.partitioned,
+        Args#index_query_args.partition
     };
 export(#index_query_args{include_fields = nil, highlight_fields = nil} = Args) ->
     {index_query_args,
@@ -164,7 +200,9 @@ export(#index_query_args{include_fields = nil, highlight_fields = nil} = Args) -
         Args#index_query_args.stable,
         Args#index_query_args.counts,
         Args#index_query_args.ranges,
-        Args#index_query_args.drilldown
+        Args#index_query_args.drilldown,
+        Args#index_query_args.partitioned,
+        Args#index_query_args.partition
     };
 export(QueryArgs) ->
     QueryArgs.

@@ -128,6 +128,7 @@ count_pending_purged_docs_since(Db, IndexPid) ->
 
 update_or_delete_index(IndexPid, Db, DI, Proc) ->
     #doc_info{id=Id, revs=[#rev_info{deleted=Del}|_]} = DI,
+    DbName = couch_db:name(Db),
     case Del of
         true ->
             ok = clouseau_rpc:delete(IndexPid, Id);
@@ -138,7 +139,9 @@ update_or_delete_index(IndexPid, Db, DI, Proc) ->
             Fields1 = [list_to_tuple(Field) || Field <- Fields],
             case Fields1 of
                 [] -> ok = clouseau_rpc:delete(IndexPid, Id);
-                _  -> ok = clouseau_rpc:update(IndexPid, Id, Fields1)
+                _  ->
+                    Fields2 = maybe_add_partition(DbName, Id, Fields1),
+                    ok = clouseau_rpc:update(IndexPid, Id, Fields2)
             end
     end.
 
@@ -157,3 +160,13 @@ update_task(NumChanges) ->
             (Changes2 * 100) div Total
     end,
     couch_task_status:update([{progress, Progress}, {changes_done, Changes2}]).
+
+
+maybe_add_partition(Db, Id, Fields) ->
+    case mem3:is_partitioned(Db) of
+        true ->
+            PK = hd(binary:split(Id, <<":">>)),
+            [{<<"_partition">>, PK, {[]}} | Fields];
+        false ->
+            Fields
+    end.

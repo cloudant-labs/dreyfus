@@ -16,11 +16,29 @@
 -module(dreyfus_httpd).
 
 -export([handle_search_req/3, handle_info_req/3, handle_disk_size_req/3,
-         handle_cleanup_req/2, handle_analyze_req/1]).
+         handle_cleanup_req/2, handle_analyze_req/1, handle_partition_search_req/4]).
 -include("dreyfus.hrl").
 -include_lib("couch/include/couch_db.hrl").
 -import(chttpd, [send_method_not_allowed/2, send_json/2, send_json/3,
                  send_error/2]).
+
+
+handle_partition_search_req(#httpd{method=Method,
+                            path_parts=[_, _, _, _, _, _, IndexName]} = Req,
+                            Db, DDoc, Partition)
+  when Method == 'GET'; Method == 'POST' ->
+    QueryArgs = parse_index_params(Req),
+    QueryArgs1 = QueryArgs#index_query_args{
+        partition = Partition,
+        partitioned = true
+    },
+    check_partition_restrictions(QueryArgs1),
+    handle_search_req_int(Req, Db, DDoc, IndexName, QueryArgs1, 0, 500);
+handle_partition_search_req(#httpd{path_parts=[_, _, _, _, _]}=Req, _Db, _DDoc, _Partition) ->
+    send_method_not_allowed(Req, "GET,POST");
+handle_partition_search_req(Req, _Db, _DDoc, _Partition) ->
+    send_error(Req, {bad_request, "path not recognized"}).
+
 
 handle_search_req(Req, Db, DDoc) ->
     handle_search_req(Req, Db, DDoc, 0, 500).
@@ -28,13 +46,33 @@ handle_search_req(Req, Db, DDoc) ->
 handle_search_req(#httpd{method=Method, path_parts=[_, _, _, _, IndexName]}=Req
                   ,Db, DDoc, RetryCount, RetryPause)
   when Method == 'GET'; Method == 'POST' ->
+    QueryArgs = parse_index_params(Req),
+
+    DbName = couch_db:name(Db),
+    DbPartitioned = mem3:is_partitioned(DbName),
+    Partitioned = couch_mrview:get_partitioned_opt(DDoc#doc.body, DbPartitioned),
+
+    case Partitioned of
+        false ->
+            handle_search_req_int(Req, Db, DDoc, IndexName, QueryArgs, RetryCount, RetryPause);
+        true ->
+            throw({bad_request, <<"`partition` parameter is not supported in this search.">>})
+    end;
+handle_search_req(#httpd{path_parts=[_, _, _, _, _]}=Req, _Db, _DDoc, _RetryCount, _RetryPause) ->
+    send_method_not_allowed(Req, "GET,POST");
+handle_search_req(Req, _Db, _DDoc, _RetryCount, _RetryPause) ->
+    send_error(Req, {bad_request, "path not recognized"}).
+
+
+handle_search_req_int(Req, Db, DDoc, IndexName, QueryArgs, RetryCount, RetryPause) ->
     DbName = couch_db:name(Db),
     Start = os:timestamp(),
-    QueryArgs = #index_query_args{
+    #index_query_args{
         q = Query,
         include_docs = IncludeDocs,
         grouping = Grouping
-    } = parse_index_params(Req),
+    } = QueryArgs,
+
     case Query of
         undefined ->
             Msg = <<"Query must include a 'q' or 'query' argument">>,
@@ -75,7 +113,7 @@ handle_search_req(#httpd{method=Method, path_parts=[_, _, _, _, IndexName]}=Req
                     ] ++ Counts ++ Ranges
                     });
                 {error, Reason} ->
-                    handle_error(Req, Db, DDoc, RetryCount, RetryPause, Reason)
+                    handle_error(Req, Db, DDoc, IndexName, QueryArgs, RetryCount, RetryPause, Reason)
             end;
         _ ->
             % ensure limit in group query >0
@@ -93,19 +131,16 @@ handle_search_req(#httpd{method=Method, path_parts=[_, _, _, _, IndexName]}=Req
                             Groups = [group_to_json(DbName, IncludeDocs, Group, UseNewApi) || Group <- Groups0],
                             send_grouped_response(Req, {TotalHits, TotalGroupedHits, Groups}, UseNewApi);
                         {error, Reason} ->
-                            handle_error(Req, Db, DDoc, RetryCount, RetryPause, Reason)
+                            handle_error(Req, Db, DDoc, IndexName, QueryArgs1, RetryCount, RetryPause, Reason)
                     end;
                 {error, Reason} ->
-                    handle_error(Req, Db, DDoc, RetryCount, RetryPause, Reason)
+                    handle_error(Req, Db, DDoc, IndexName, QueryArgs, RetryCount, RetryPause, Reason)
             end
     end,
     RequestTime = timer:now_diff(os:timestamp(), Start) div 1000,
     couch_stats:update_histogram([dreyfus, httpd, search], RequestTime),
-    Response;
-handle_search_req(#httpd{path_parts=[_, _, _, _, _]}=Req, _Db, _DDoc, _RetryCount, _RetryPause) ->
-    send_method_not_allowed(Req, "GET,POST");
-handle_search_req(Req, _Db, _DDoc, _RetryCount, _RetryPause) ->
-    send_error(Req, {bad_request, "path not recognized"}).
+    Response.
+
 
 handle_info_req(#httpd{method='GET', path_parts=[_, _, _, _, IndexName]}=Req
                   ,Db, #doc{id=Id}=DDoc) ->
@@ -245,6 +280,8 @@ validate_index_query(highlight_number, Value, Args) ->
     Args#index_query_args{highlight_number=Value};
 validate_index_query(highlight_size, Value, Args) ->
     Args#index_query_args{highlight_size=Value};
+validate_index_query(partition, Value, Args) ->
+    Args#index_query_args{partition=Value};
 validate_index_query(extra, _Value, Args) ->
     Args.
 
@@ -294,6 +331,8 @@ parse_index_param("highlight_number", Value) ->
     [{highlight_number, parse_positive_int_param2("highlight_number", Value)}];
 parse_index_param("highlight_size", Value) ->
     [{highlight_size, parse_positive_int_param2("highlight_size", Value)}];
+parse_index_param("partition", Value) ->
+    [{partition, ?l2b(Value)}];
 parse_index_param(Key, Value) ->
     [{extra, {Key, Value}}].
 
@@ -339,6 +378,8 @@ parse_json_index_param(<<"highlight_number">>, Value) ->
     [{highlight_number, parse_positive_int_param2("highlight_number", Value)}];
 parse_json_index_param(<<"highlight_size">>, Value) ->
     [{highlight_size, parse_positive_int_param2("highlight_size", Value)}];
+parse_json_index_param(<<"partition">>, Value) ->
+    [{partition, ?l2b(Value)}];
 parse_json_index_param(Key, Value) ->
     [{extra, {Key, Value}}].
 
@@ -479,19 +520,43 @@ send_grouped_response(Req, {TotalHits, TotalGroupedHits, Groups}, UseNewApi) ->
     end,
     send_json(Req, 200, {GroupResponsePairs}).
 
-handle_error(Req, Db, DDoc, RetryCount, RetryPause, {exit, _}) ->
-    backoff_and_retry(Req, Db, DDoc, RetryCount, RetryPause);
-handle_error(Req, Db, DDoc, RetryCount, RetryPause, {{normal, _}, _}) ->
-    backoff_and_retry(Req, Db, DDoc, RetryPause, RetryCount);
-handle_error(Req, _Db, _DDoc, _RetryCount, _RetryPause, Reason) ->
+handle_error(Req, Db, DDoc, IndexName, QueryArgs, RetryCount, RetryPause, {exit, _}) ->
+    backoff_and_retry(Req, Db, DDoc, IndexName, QueryArgs, RetryCount, RetryPause);
+handle_error(Req, Db, DDoc, IndexName, QueryArgs, RetryCount, RetryPause, {{normal, _}, _}) ->
+    backoff_and_retry(Req, Db, DDoc, IndexName, QueryArgs, RetryPause, RetryCount);
+handle_error(Req, _Db, _DDoc, _IndexName, _QueryArgs, _RetryCount, _RetryPause, Reason) ->
     send_error(Req, Reason).
 
-backoff_and_retry(Req, Db, DDoc, RetryCount, RetryPause) ->
+backoff_and_retry(Req, Db, DDoc, IndexName, QueryArgs, RetryCount, RetryPause) ->
     RetryLimit = list_to_integer(config:get("dreyfus", "retry_limit", "5")),
     case RetryCount > RetryLimit of
         true ->
             send_error(Req, timeout);
         false ->
             timer:sleep(RetryPause),
-            handle_search_req(Req, Db, DDoc, RetryCount + 1, RetryPause * 2)
+            handle_search_req_int(Req, Db, DDoc, IndexName, QueryArgs, RetryCount + 1, RetryPause * 2)
     end.
+
+
+check_partition_restrictions(#index_query_args{grouping= Grouping} = Args) ->
+    #grouping{
+        by = GroupingBy
+    } = Grouping,
+
+    Restrictions = [
+        {<<"`include_docs`">>, Args#index_query_args.include_docs, false},
+        {<<"`counts`">>, Args#index_query_args.counts, nil},
+        {<<"`drilldown`">>, Args#index_query_args.drilldown, []},
+        {<<"`ranges`">>, Args#index_query_args.ranges, nil},
+        {<<"`group_by`">>, GroupingBy, nil}
+    ],
+    lists:foreach(fun ({Param, Field, Value}) ->
+        case Field =/= Value of
+            true ->
+                Msg = [Param, <<" is not allowed for a partition search">>],
+                throw({bad_request, ?l2b(Msg)});
+            false ->
+                ok
+        end
+    end, Restrictions),
+    ok.

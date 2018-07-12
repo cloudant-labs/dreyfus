@@ -48,7 +48,9 @@
     highlight_post_tag = <<"</em>">>,
     highlight_number=1,
     highlight_size=0,
-    raw_bookmark=false
+    raw_bookmark=false,
+    partition=nil,
+    partitioned=false
 }).
 
 -record(sortable, {

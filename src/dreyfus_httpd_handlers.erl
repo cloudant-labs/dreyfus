@@ -15,7 +15,7 @@
 
 -module(dreyfus_httpd_handlers).
 
--export([url_handler/1, db_handler/1, design_handler/1]).
+-export([url_handler/1, db_handler/1, design_handler/1, partition_design_handler/1]).
 
 url_handler(<<"_search_analyze">>) -> fun dreyfus_httpd:handle_analyze_req/1;
 url_handler(_) -> no_match.
@@ -27,3 +27,6 @@ design_handler(<<"_search">>)      -> fun dreyfus_httpd:handle_search_req/3;
 design_handler(<<"_search_info">>) -> fun dreyfus_httpd:handle_info_req/3;
 design_handler(<<"_search_disk_size">>) -> fun dreyfus_httpd:handle_disk_size_req/3;
 design_handler(_) -> no_match.
+
+partition_design_handler(<<"_search">>) -> fun dreyfus_httpd:handle_partition_search_req/4;
+partition_design_handler(_) -> no_match.
