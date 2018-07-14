@@ -78,7 +78,7 @@ allow_fabric_request() ->
     ok = meck:expect(dreyfus_fabric_search, go, fun(A, DDocId, B, C) -> 
             ok
     end),
-    Index = ["mydb", "myddocid", "myindexname"],
+    Index = ["mydb2", "myddocid2", "myindexname2"],
     QueryArgs = #index_query_args{},
     dreyfus_test_util:with_config_listener(fun() ->
         config:set("dreyfus", "black_list", [Index]),

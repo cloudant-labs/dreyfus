@@ -137,7 +137,8 @@ handle_call({await, RequestSeq}, From,
                 waiting_list=[{From,RequestSeq}|WaitList]
             };
         _ ->
-            couch_log:notice("Index Blocked from Updating - db: ~p, ddocid: ~p name: ~p", [DbName, DDocId, IdxName]),
+            couch_log:notice("Index Blocked from Updating - db: ~p,"
+                " ddocid: ~p name: ~p", [DbName, DDocId, IdxName]),
             State
     end,
     {noreply, NewState};

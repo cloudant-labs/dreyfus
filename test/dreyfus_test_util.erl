@@ -36,16 +36,10 @@ with_config_listener(Fun) ->
 wait_for_config() ->
     receive
         dreyfus_config_change_finished -> ok
-    after 1000 ->
+    % waiting 2000 here because the polling in dreyfus_config is 1000
+    after 2000 ->
         erlang:error(config_change_timeout)
     end.
-
-
-config_files() ->
-    Path = filename:dirname(code:which(?MODULE)),
-    Name = filename:join(Path, "dreyfus_test.ini"),
-    ok = file:write_file(Name, "[log]\nwriter = ets\n"),
-    [Name].
 
 
 get_listener() ->

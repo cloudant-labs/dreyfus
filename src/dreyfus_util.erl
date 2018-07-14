@@ -178,8 +178,10 @@ in_black_list(_DbName, _GroupId, _IndexName) ->
     false.
 
 in_black_list(IndexEntry) when is_list(IndexEntry) ->
-    BlackList = dreyfus_config:get(black_list),
-    lists:member(IndexEntry, BlackList);
+    case dreyfus_config:get(IndexEntry) of
+        undefined -> false;
+        _ -> true
+    end;
 in_black_list(_IndexEntry) ->
     false.
 
@@ -201,8 +203,8 @@ add_bl_element(DbName, GroupId, IndexName) when is_binary(DbName),
     add_bl_element([?b2l(DbName), ?b2l(GroupId), ?b2l(IndexName)]).
 
 add_bl_element(IndexEntry) when is_list(IndexEntry) ->
-    BlackList = dreyfus_config:get(black_list),
-    case in_black_list(IndexEntry) of
+    BlackList = config:get("dreyfus", "black_list", []),
+    case lists:member(IndexEntry, BlackList) of
         true ->
             ok;
         false ->
@@ -211,6 +213,7 @@ add_bl_element(IndexEntry) when is_list(IndexEntry) ->
     end;
 add_bl_element(_IndexEntry) ->
     ok.
+
 
 remove_bl_element(DbName, GroupId, IndexName) when is_list(DbName),
         is_list(GroupId), is_list(IndexName) ->
@@ -221,8 +224,8 @@ remove_bl_element(DbName, GroupId, IndexName) when is_binary(DbName),
     remove_bl_element([?b2l(DbName), ?b2l(GroupId), ?b2l(IndexName)]).
 
 remove_bl_element(IndexEntry) when is_list(IndexEntry) ->
-    BlackList = dreyfus_config:get(black_list),
-    case in_black_list(IndexEntry) of
+    BlackList = config:get("dreyfus", "black_list", []),
+    case lists:member(IndexEntry, BlackList) of
         true ->
             NewList = lists:delete(IndexEntry, BlackList),
             config:set("dreyfus", "black_list", NewList);
