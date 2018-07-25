@@ -204,15 +204,18 @@ add_bl_element(DbName, GroupId, IndexName) when is_binary(DbName),
 
 add_bl_element(IndexEntry) when is_list(IndexEntry) ->
     BlackList = config:get("dreyfus", "black_list", []),
-    case lists:member(IndexEntry, BlackList) of
+    UpdatedList = case lists:member(IndexEntry, BlackList) of
         true ->
-            ok;
+            BlackList;
         false ->
             NewList = [IndexEntry | BlackList],
-            config:set("dreyfus", "black_list", NewList)
-    end;
+            config:set("dreyfus", "black_list", NewList),
+            NewList
+    end,
+    UpdatedList;
 add_bl_element(_IndexEntry) ->
-    ok.
+    config:get("dreyfus", "black_list", []).
+
 
 
 remove_bl_element(DbName, GroupId, IndexName) when is_list(DbName),
@@ -225,15 +228,17 @@ remove_bl_element(DbName, GroupId, IndexName) when is_binary(DbName),
 
 remove_bl_element(IndexEntry) when is_list(IndexEntry) ->
     BlackList = config:get("dreyfus", "black_list", []),
-    case lists:member(IndexEntry, BlackList) of
+    UpdatedList = case lists:member(IndexEntry, BlackList) of
         true ->
             NewList = lists:delete(IndexEntry, BlackList),
-            config:set("dreyfus", "black_list", NewList);
+            config:set("dreyfus", "black_list", NewList),
+            NewList;
         false ->
-            ok
-    end;
+            BlackList
+    end,
+    UpdatedList;
 remove_bl_element(_IndexEntry) ->
-    ok.
+    config:get("dreyfus", "black_list", []).
 
 
 -ifdef(TEST).
