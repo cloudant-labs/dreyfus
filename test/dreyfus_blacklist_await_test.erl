@@ -55,7 +55,7 @@ dreyfus_blacklist_await_test_() ->
 do_not_await_1() ->
     ok = meck:new(dreyfus_index, [passthrough]),
     dreyfus_test_util:with_config_listener(fun() ->
-        dreyfus_util:add_bl_element([?b2l(?DBNAME), "black_list_doc", "my_index"]),
+        dreyfus_test_util:add_bl_element([?b2l(?DBNAME), "black_list_doc", "my_index"]),
         dreyfus_test_util:wait_for_config(),
         Index = #index{dbname=?DBNAME, name=?INDEX_NAME, ddoc_id=?DDOC_ID},
         State = create_state(?DBNAME, Index, nil, nil, []),

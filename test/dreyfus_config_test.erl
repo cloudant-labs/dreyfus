@@ -61,11 +61,11 @@ check_add_to_black_list() ->
     Index3 = ["mydb3", "myddocid3", "myindexname3"],
     Index4 = {"mydb4", "myddocid4", "myindexname4"},
     dreyfus_test_util:with_config_listener(fun() ->
-        dreyfus_util:add_bl_element(<<"mydb">>, <<"myddocid">>, <<"myindexname">>),
-        dreyfus_util:add_bl_element("mydb2", "myddocid2", "myindexname2"),
-        dreyfus_util:add_bl_element(Index3),
+        dreyfus_test_util:add_bl_element(<<"mydb">>, <<"myddocid">>, <<"myindexname">>),
+        dreyfus_test_util:add_bl_element("mydb2", "myddocid2", "myindexname2"),
+        dreyfus_test_util:add_bl_element(Index3),
         dreyfus_test_util:wait_for_config(),
-        dreyfus_util:add_bl_element(Index4),
+        dreyfus_test_util:add_bl_element(Index4),
         FinalBl = [Index3, Index2, Index],
         lists:foreach(fun (I) ->
             ?assertEqual(true, dreyfus_config:get(I))
@@ -77,17 +77,17 @@ check_delete_from_blacklist() ->
     Index2 = ["mydb2", "myddocid2", "myindexname2"],
     Index3 = ["mydb3", "myddocid3", "myindexname3"],
     dreyfus_test_util:with_config_listener(fun() ->
-        dreyfus_util:add_bl_element(Index),
-        dreyfus_util:add_bl_element(Index2),
-        dreyfus_util:add_bl_element(Index3),
-        dreyfus_util:remove_bl_element(<<"mydb">>, <<"myddocid">>,
+        dreyfus_test_util:add_bl_element(Index),
+        dreyfus_test_util:add_bl_element(Index2),
+        dreyfus_test_util:add_bl_element(Index3),
+        dreyfus_test_util:remove_bl_element(<<"mydb">>, <<"myddocid">>,
             <<"myindexname">>),
-        dreyfus_util:remove_bl_element("mydb2", "myddocid2", "myindexname2"),
+        dreyfus_test_util:remove_bl_element("mydb2", "myddocid2", "myindexname2"),
         dreyfus_test_util:wait_for_config(),
         ?assertEqual(undefined, dreyfus_config:get(Index)),
         ?assertEqual(undefined, dreyfus_config:get(Index2)),
         ?assertEqual(true, dreyfus_config:get(Index3)),
-        dreyfus_util:remove_bl_element(Index3),
+        dreyfus_test_util:remove_bl_element(Index3),
         dreyfus_test_util:wait_for_config(),
         ?assertEqual(undefined, dreyfus_config:get(Index3))
     end).

@@ -2,6 +2,7 @@
 
 -compile(export_all).
 
+-include_lib("couch/include/couch_db.hrl").
 
 add_listener(Listener) ->
     Listeners = case application:get_env(dreyfus, config_listeners) of
@@ -55,3 +56,48 @@ get_handler() ->
             Acc
     end,
     lists:foldl(FoldFun, not_found, gen_event:which_handlers(config_event)).
+
+add_bl_element(DbName, GroupId, IndexName) when is_list(DbName),
+        is_list(GroupId), is_list(IndexName) ->
+    add_bl_element([DbName, GroupId, IndexName]);
+add_bl_element(DbName, GroupId, IndexName) when is_binary(DbName),
+        is_binary(GroupId), is_binary(IndexName) ->
+    add_bl_element([?b2l(DbName), ?b2l(GroupId), ?b2l(IndexName)]).
+
+add_bl_element(IndexEntry) when is_list(IndexEntry) ->
+    BlackList = config:get("dreyfus", "black_list", []),
+    UpdatedList = case lists:member(IndexEntry, BlackList) of
+        true ->
+            BlackList;
+        false ->
+            NewList = [IndexEntry | BlackList],
+            config:set("dreyfus", "black_list", NewList),
+            NewList
+    end,
+    UpdatedList;
+add_bl_element(_IndexEntry) ->
+    config:get("dreyfus", "black_list", []).
+
+
+
+remove_bl_element(DbName, GroupId, IndexName) when is_list(DbName),
+        is_list(GroupId), is_list(IndexName) ->
+    remove_bl_element([DbName, GroupId, IndexName]);
+
+remove_bl_element(DbName, GroupId, IndexName) when is_binary(DbName),
+        is_binary(GroupId), is_binary(IndexName) ->
+    remove_bl_element([?b2l(DbName), ?b2l(GroupId), ?b2l(IndexName)]).
+
+remove_bl_element(IndexEntry) when is_list(IndexEntry) ->
+    BlackList = config:get("dreyfus", "black_list", []),
+    UpdatedList = case lists:member(IndexEntry, BlackList) of
+        true ->
+            NewList = lists:delete(IndexEntry, BlackList),
+            config:set("dreyfus", "black_list", NewList),
+            NewList;
+        false ->
+            BlackList
+    end,
+    UpdatedList;
+remove_bl_element(_IndexEntry) ->
+    config:get("dreyfus", "black_list", []).
