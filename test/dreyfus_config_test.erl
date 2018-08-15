@@ -23,7 +23,7 @@ start() ->
     test_util:start_couch([dreyfus]).
 
 setup() ->
-    config:set("dreyfus", "black_list", []).
+    ok.
 
 teardown(_) ->
     ok.
@@ -39,55 +39,33 @@ dreyfus_config_test_() ->
                 fun setup/0, fun teardown/1,
                 [
                     fun check_black_list/0,
-                    fun check_add_to_black_list/0,
                     fun check_delete_from_blacklist/0
                 ]
             }
         }
     }.
 
-
 check_black_list() ->
-    Index = ["mydb", "myddocid", "myindexname"],
-    dreyfus_test_util:with_config_listener(fun() ->
-        config:set("dreyfus", "black_list", [Index]),
-        dreyfus_test_util:wait_for_config(),
-        ?assertEqual(true, dreyfus_config:get(Index))
-    end).
-
-check_add_to_black_list() ->
     Index = ["mydb", "myddocid", "myindexname"],
     Index2 = ["mydb2", "myddocid2", "myindexname2"],
     Index3 = ["mydb3", "myddocid3", "myindexname3"],
-    Index4 = {"mydb4", "myddocid4", "myindexname4"},
-    dreyfus_test_util:with_config_listener(fun() ->
-        dreyfus_test_util:add_bl_element(<<"mydb">>, <<"myddocid">>, <<"myindexname">>),
-        dreyfus_test_util:add_bl_element("mydb2", "myddocid2", "myindexname2"),
-        dreyfus_test_util:add_bl_element(Index3),
-        dreyfus_test_util:wait_for_config(),
-        dreyfus_test_util:add_bl_element(Index4),
-        FinalBl = [Index3, Index2, Index],
-        lists:foreach(fun (I) ->
-            ?assertEqual(true, dreyfus_config:get(I))
-        end, FinalBl)
-    end).
+    ok = config:set("dreyfus_blacklist", Index, "true"),
+    ok = config:set("dreyfus_blacklist", Index2, "true"),
+    ok = config:set("dreyfus_blacklist", Index3, "true"),
+    dreyfus_test_util:wait_config_change(Index3, "true"),
+    FinalBl = [Index3, Index2, Index],
+    lists:foreach(fun (I) ->
+        ?assertEqual("true", dreyfus_config:get(I))
+    end, FinalBl).
 
 check_delete_from_blacklist() ->
     Index = ["mydb", "myddocid", "myindexname"],
     Index2 = ["mydb2", "myddocid2", "myindexname2"],
-    Index3 = ["mydb3", "myddocid3", "myindexname3"],
-    dreyfus_test_util:with_config_listener(fun() ->
-        dreyfus_test_util:add_bl_element(Index),
-        dreyfus_test_util:add_bl_element(Index2),
-        dreyfus_test_util:add_bl_element(Index3),
-        dreyfus_test_util:remove_bl_element(<<"mydb">>, <<"myddocid">>,
-            <<"myindexname">>),
-        dreyfus_test_util:remove_bl_element("mydb2", "myddocid2", "myindexname2"),
-        dreyfus_test_util:wait_for_config(),
-        ?assertEqual(undefined, dreyfus_config:get(Index)),
-        ?assertEqual(undefined, dreyfus_config:get(Index2)),
-        ?assertEqual(true, dreyfus_config:get(Index3)),
-        dreyfus_test_util:remove_bl_element(Index3),
-        dreyfus_test_util:wait_for_config(),
-        ?assertEqual(undefined, dreyfus_config:get(Index3))
-    end).
+    ok = config:set("dreyfus_blacklist", Index, "true"),
+    dreyfus_test_util:wait_config_change(Index, "true"),
+    ok = config:delete("dreyfus_blacklist", Index),
+    dreyfus_test_util:wait_config_change(Index, undefined),
+    ok = config:set("dreyfus_blacklist", Index2, "true"),
+    dreyfus_test_util:wait_config_change(Index2, "true"),
+    ?assertEqual(undefined, dreyfus_config:get(Index)),
+    ?assertEqual("true", dreyfus_config:get(Index2)).
