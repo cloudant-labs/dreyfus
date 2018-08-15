@@ -46,9 +46,9 @@ dreyfus_config_test_() ->
     }.
 
 check_black_list() ->
-    Index = ["mydb", "myddocid", "myindexname"],
-    Index2 = ["mydb2", "myddocid2", "myindexname2"],
-    Index3 = ["mydb3", "myddocid3", "myindexname3"],
+    Index = "mydb.myddocid.myindexname",
+    Index2 = "mydb2.myddocid2.myindexname2",
+    Index3 = "mydb3.myddocid3.myindexname3",
     ok = config:set("dreyfus_blacklist", Index, "true"),
     ok = config:set("dreyfus_blacklist", Index2, "true"),
     ok = config:set("dreyfus_blacklist", Index3, "true"),
@@ -59,8 +59,8 @@ check_black_list() ->
     end, FinalBl).
 
 check_delete_from_blacklist() ->
-    Index = ["mydb", "myddocid", "myindexname"],
-    Index2 = ["mydb2", "myddocid2", "myindexname2"],
+    Index = "mydb.myddocid.myindexname",
+    Index2 = "mydb2.myddocid2.myindexname2",
     ok = config:set("dreyfus_blacklist", Index, "true"),
     dreyfus_test_util:wait_config_change(Index, "true"),
     ok = config:delete("dreyfus_blacklist", Index),
