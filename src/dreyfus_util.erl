@@ -167,12 +167,12 @@ time(Metric, {M, F, A}) when is_list(Metric) ->
         couch_stats:update_histogram([dreyfus | Metric],  Length)
     end.
 
-in_black_list(DbName, GroupId, IndexName) when is_list(DbName),
-        is_list(GroupId), is_list(IndexName) ->
-    in_black_list([DbName, GroupId, IndexName]);
 in_black_list(DbName, GroupId, IndexName) when is_binary(DbName),
         is_binary(GroupId), is_binary(IndexName) ->
-    in_black_list([?b2l(DbName), ?b2l(GroupId), ?b2l(IndexName)]);
+    in_black_list(?b2l(DbName), ?b2l(GroupId), ?b2l(IndexName));
+in_black_list(DbName, GroupId, IndexName) when is_list(DbName),
+        is_list(GroupId), is_list(IndexName) ->
+    in_black_list(lists:flatten([DbName, ".", GroupId, ".", IndexName]));
 in_black_list(_DbName, _GroupId, _IndexName) ->
     false.
 

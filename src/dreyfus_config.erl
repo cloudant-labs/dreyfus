@@ -3,8 +3,7 @@
  -export([data/0, get/1]).
 
 data() ->
-    Data = config:get("dreyfus", "black_list", []),
-    [{K, true} || K <- Data].
+    config:get("dreyfus_blacklist").
 
 get(Key) ->
     Handle = couch_epi:get_handle({dreyfus, black_list}),
