@@ -73,8 +73,8 @@ allow_fabric_request() ->
         fun(A, GroupId, B, C) when is_binary(GroupId) -> 
             meck:passthrough([A, GroupId, B, C])
     end),
-    ok = meck:expect(dreyfus_fabric_search, go, fun(A, DDocId, B, C) -> 
-            ok
+    ok = meck:expect(dreyfus_fabric_search, go, fun(_, _, _, _) ->
+        ok
     end),
     Denied = "mydb2.myddocid2.myindexname2",
     QueryArgs = #index_query_args{},
