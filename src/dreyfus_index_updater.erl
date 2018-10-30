@@ -136,9 +136,10 @@ update_or_delete_index(IndexPid, Db, DI, Proc) ->
             Json = couch_doc:to_json_obj(Doc, []),
             [Fields|_] = proc_prompt(Proc, [<<"index_doc">>, Json]),
             Fields1 = [list_to_tuple(Field) || Field <- Fields],
-            case Fields1 of
+            Fields2 = maybe_add_partition(Db, Id, Fields1),
+            case Fields2 of
                 [] -> ok = clouseau_rpc:delete(IndexPid, Id);
-                _  -> ok = clouseau_rpc:update(IndexPid, Id, Fields1)
+                _  -> ok = clouseau_rpc:update(IndexPid, Id, Fields2)
             end
     end.
 
@@ -157,3 +158,15 @@ update_task(NumChanges) ->
             (Changes2 * 100) div Total
     end,
     couch_task_status:update([{progress, Progress}, {changes_done, Changes2}]).
+
+
+maybe_add_partition(_Db, _Id, []) ->
+    [];
+maybe_add_partition(Db, Id, Fields) ->
+    case couch_db:is_partitioned(Db) of
+        true ->
+            Partition = couch_partition:from_docid(Id),
+            [{<<"_partition">>, Partition, {[]}} | Fields];
+        false ->
+            Fields
+    end.
