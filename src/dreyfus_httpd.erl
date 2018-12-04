@@ -34,7 +34,7 @@ handle_search_req(#httpd{method=Method, path_parts=[_, _, _, _, IndexName]}=Req
         include_docs = IncludeDocs,
         grouping = Grouping
     } = parse_index_params(Req),
-    validate_search_restrictions(Db, QueryArgs),
+    validate_search_restrictions(Db, DDoc, QueryArgs),
     Response = case Grouping#grouping.by of
         nil ->
             case dreyfus_fabric_search:go(DbName, DDoc, IndexName, QueryArgs) of
@@ -417,7 +417,7 @@ parse_non_negative_int_param(Name, Val, Prop, Default) ->
     end.
 
 
-validate_search_restrictions(Db, Args) ->
+validate_search_restrictions(Db, DDoc, Args) ->
     #index_query_args{
         q = Query,
         partition = Partition,
@@ -435,21 +435,45 @@ validate_search_restrictions(Db, Args) ->
             ok
     end,
 
-    case not fabric_util:is_partitioned(Db) andalso is_binary(Partition) of
+    DbPartitioned = fabric_util:is_partitioned(Db),
+    ViewPartitioned = get_view_partition_option(DDoc, DbPartitioned),
+
+    case not DbPartitioned andalso is_binary(Partition) of
         true ->
             Msg2 = <<"`partition` not supported on this index">>,
-            throw({bad_requeset, Msg2});
+            throw({bad_request, Msg2});
         false ->
             ok
     end,
 
+    io:format("BOOM ~p ~n Partitioned ~p ~n", [DDoc, ViewPartitioned]),
+
+    case {ViewPartitioned, is_binary(Partition)} of
+        {false, false} ->
+            ok;
+        {true, true} -> 
+            ok;
+        {true, false} ->
+            Msg3 = <<"`partition` parameter is mandatory "
+                        "for queries to this view.">>,
+            throw({bad_request, Msg3});
+        {false, true} ->
+            Msg4 = <<"`partition` not supported on this index">>,
+            throw({bad_request, Msg4})
+    end,
+
     case GroupBy /= nil andalso is_binary(Partition) of
         true ->
-            Msg3 = <<"`group_by` and `partition` are incompatible">>,
-            throw({bad_request, Msg3});
+            Msg5 = <<"`group_by` and `partition` are incompatible">>,
+            throw({bad_request, Msg5});
         false ->
             ok
     end.
+
+
+get_view_partition_option(#doc{body = {Props}}, Default) ->
+    {Options} = couch_util:get_value(<<"options">>, Props, {[]}),
+    couch_util:get_value(<<"partitioned">>, Options, Default).
 
 
 hits_to_json(DbName, IncludeDocs, Hits) ->
