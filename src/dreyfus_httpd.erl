@@ -256,7 +256,7 @@ parse_index_param("bookmark", Value) ->
 parse_index_param("sort", Value) ->
     [{sort, ?JSON_DECODE(Value)}];
 parse_index_param("limit", Value) ->
-    [{limit, parse_non_negative_int_param("limit", Value, "max_limit", "200")}];
+    [{limit, ?JSON_DECODE(Value)}];
 parse_index_param("stale", "ok") ->
     [{stale, ok}];
 parse_index_param("stale", _Value) ->
@@ -305,7 +305,7 @@ parse_json_index_param(<<"bookmark">>, Value) ->
 parse_json_index_param(<<"sort">>, Value) ->
     [{sort, Value}];
 parse_json_index_param(<<"limit">>, Value) ->
-    [{limit, parse_non_negative_int_param("limit", Value, "max_limit", "200")}];
+    [{limit, ?JSON_DECODE(Value)}];
 parse_json_index_param(<<"stale">>, <<"ok">>) ->
     [{stale, ok}];
 parse_json_index_param(<<"include_docs">>, Value) when is_boolean(Value) ->
@@ -421,7 +421,8 @@ validate_search_restrictions(Db, Args) ->
     #index_query_args{
         q = Query,
         partition = Partition,
-        grouping = Grouping
+        grouping = Grouping,
+        limit = Limit
     } = Args,
     #grouping{
         by = GroupBy
@@ -441,6 +442,13 @@ validate_search_restrictions(Db, Args) ->
             throw({bad_requeset, Msg2});
         false ->
             ok
+    end,
+
+    case fabric_util:is_partitioned(Db) of
+        true ->
+            parse_non_negative_int_param("limit", Limit, "max_limit", "2000");
+        false ->
+            parse_non_negative_int_param("limit", Limit, "max_limit", "200")
     end,
 
     case GroupBy /= nil andalso is_binary(Partition) of
