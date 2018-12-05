@@ -139,27 +139,4 @@ defmodule SearchPartitionTest do
     assert ids == ["bar:1", "bar:5", "bar:9", "foo:2", "bar:3", "foo:4", "foo:6", "bar:7", "foo:8", "foo:10"]
   end
 
-  @tag :with_partitioned_db
-  @tag :skip
-  test "All restricted parameters are not allowed", context do
-    db_name = context[:db_name]
-    create_search_docs(db_name)
-    create_ddoc(db_name)
-    Enum.each([
-        {:include_docs, true},
-        {:counts, "[\"type\"]"},
-        {:group_field, "some"},
-        {:ranges, :jiffy.encode(%{price: %{cheap: "[0 TO 100]"}})},
-        {:drilldown, "[\"key\",\"a\"]"}
-      ],
-      fn ({key, value}) ->
-      url = "/#{db_name}/_partition/foo/_design/library/_search/books"
-      query =  %{q: "some:field", partition: "foo"}
-      query = Map.put(query, key, value)
-      resp = Couch.get(url, query: query)
-      %{:body => %{"reason" => reason}} = resp
-      assert Regex.match?(~r/is not supported on this search index/, reason)
-    end)
-  end
-
 end
