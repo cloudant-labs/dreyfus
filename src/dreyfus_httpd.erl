@@ -446,9 +446,12 @@ validate_search_restrictions(Db, Args) ->
 
     case fabric_util:is_partitioned(Db) of
         true ->
-            parse_non_negative_int_param("limit", Limit, "max_limit", "2000");
+            MaxLimit = config:get("dreyfus", "max_limit", "2000"),
+            parse_non_negative_int_param(
+                "limit", Limit, "max_limit_partitions", MaxLimit);
         false ->
-            parse_non_negative_int_param("limit", Limit, "max_limit", "200")
+            MaxLimit = config:get("dreyfus", "max_limit", "200"),
+            parse_non_negative_int_param("limit", Limit, "max_limit", MaxLimit)
     end,
 
     case GroupBy /= nil andalso is_binary(Partition) of
