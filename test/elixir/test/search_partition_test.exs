@@ -98,6 +98,14 @@ defmodule SearchPartitionTest do
     assert resp.status_code == 200
     ids = get_ids(resp)
     assert ids == ["foo:6", "foo:8"]
+
+    resp = Couch.get(url, query: %{q: "some:field", limit: 2000, bookmark: bookmark})
+    assert resp.status_code == 200
+    ids = get_ids(resp)
+    assert ids == ["foo:6", "foo:8"]
+
+    resp = Couch.get(url, query: %{q: "some:field", limit: 2001, bookmark: bookmark})
+    assert resp.status_code == 400
   end
 
   @tag :with_partitioned_db
@@ -137,6 +145,27 @@ defmodule SearchPartitionTest do
     assert resp.status_code == 200
     ids = get_ids(resp)
     assert ids == ["bar:1", "bar:5", "bar:9", "foo:2", "bar:3", "foo:4", "foo:6", "bar:7", "foo:8", "foo:10"]
+  end
+
+  @tag :with_db
+  test "normal search on non-partitioned dbs with limit", context do
+    db_name = context[:db_name]
+    create_search_docs(db_name)
+    create_ddoc(db_name)
+
+    url = "/#{db_name}/_design/library/_search/books"
+    resp = Couch.get(url, query: %{q: "some:field", limit: 3})
+    assert resp.status_code == 200
+    ids = get_ids(resp)
+    assert ids == ["bar:1", "bar:5", "bar:9"]
+
+    resp = Couch.get(url, query: %{q: "some:field", limit: 200})
+    assert resp.status_code == 200
+    ids = get_ids(resp)
+    assert ids == ["bar:1", "bar:5", "bar:9", "foo:2", "bar:3", "foo:4", "foo:6", "bar:7", "foo:8", "foo:10"]
+
+    resp = Couch.get(url, query: %{q: "some:field", limit: 201})
+    assert resp.status_code == 400
   end
 
 end
