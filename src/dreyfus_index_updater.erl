@@ -164,18 +164,10 @@ update_task(NumChanges) ->
     end,
     couch_task_status:update([{progress, Progress}, {changes_done, Changes2}]).
 
-
-maybe_skip_doc(Db, Id) ->
-    case couch_db:is_partitioned(Db) of
-        true ->
-            case Id of
-                <<"_design/", _/binary>> -> true;
-                _Else -> false
-            end;
-        false ->
-            false
-    end.
-
+maybe_skip_doc(Db, <<"_design/", _/binary>>) ->
+    couch_db:is_partitioned(Db);
+maybe_skip_doc(_Db, _Id) ->
+    false.
 
 maybe_add_partition(_Db, _Id, []) ->
     [];
