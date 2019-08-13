@@ -23,6 +23,7 @@
 -export([delete/2, update/3, cleanup/1, cleanup/2, rename/1]).
 -export([analyze/2, version/0, disk_size/1]).
 -export([set_purge_seq/2, get_purge_seq/1, get_root_dir/0]).
+-export([connected/0]).
 
 open_index(Peer, Path, Analyzer) ->
     rpc({main, clouseau()}, {open, Peer, Path, Analyzer}).
@@ -90,6 +91,21 @@ analyze(Analyzer, Text) ->
 
 version() ->
     rpc({main, clouseau()}, version).
+
+connected() ->
+    HiddenNodes = erlang:nodes(hidden),
+    case lists:member(clouseau(), HiddenNodes) of
+        true ->
+            true;
+        false ->
+            % We might have just booted up, so let's send a test RPC
+            case (catch version()) of
+                {ok, _} ->
+                    true;
+                _Err ->
+                    false
+            end
+    end.
 
 rpc(Ref, Msg) ->
     ioq:call(Ref, Msg, erlang:get(io_priority)).
